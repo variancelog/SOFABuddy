@@ -1,0 +1,65 @@
+import netCDF4 as nc
+import numpy as np
+
+def get_sofa_metadata(file_path: str) -> dict:
+    """
+    Extracts metadata from a SOFA file without loading the entire impulse response array.
+    Uses netCDF4 directly for high performance.
+    """
+    try:
+        with nc.Dataset(file_path, 'r') as ds:
+            # 1. Samplerate
+            sr_var = ds.variables.get('Data.SamplingRate')
+            if sr_var is not None:
+                samplerate = float(sr_var[0])
+            else:
+                samplerate = 0.0
+
+            # 2. Points (M) and Length (N)
+            # IR is usually (M, R, N)
+            ir_var = ds.variables.get('Data.IR')
+            if ir_var is not None:
+                points = int(ir_var.shape[0])
+                length = int(ir_var.shape[2])
+            else:
+                points = 0
+                length = 0
+
+            return {
+                "samplerate": samplerate,
+                "length": length,
+                "points": points
+            }
+    except Exception as e:
+        print(f"Error reading SOFA metadata for {file_path}: {e}")
+        return None
+
+def calculate_max_itd(file_path: str) -> float:
+    """
+    Calculates the maximum ITD (in ms) by finding peak impulse indices across all measurements.
+    """
+    try:
+        with nc.Dataset(file_path, 'r') as ds:
+            sr_var = ds.variables.get('Data.SamplingRate')
+            if sr_var is None: return 0.0
+            samplerate = float(sr_var[0])
+
+            ir_var = ds.variables.get('Data.IR')
+            if ir_var is None: return 0.0
+            
+            # Load IR data (M, R, N)
+            ir_data = ir_var[:]
+            
+            # Find index of maximum absolute value for each measurement and receiver
+            # peak_indices shape: (M, R)
+            peak_indices = np.argmax(np.abs(ir_data), axis=2)
+            
+            # Calculate difference between Right (1) and Left (0) for all M
+            itd_samples = np.abs(peak_indices[:, 1] - peak_indices[:, 0])
+            
+            max_itd_samples = np.max(itd_samples)
+            return (max_itd_samples / samplerate) * 1000.0
+            
+    except Exception as e:
+        print(f"Error calculating ITD for {file_path}: {e}")
+        return 0.0

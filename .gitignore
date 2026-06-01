@@ -1,0 +1,24 @@
+# --- Python stuff ---
+*.py[cod]
+*$py.class
+.env
+.venv
+venv/
+.pytest_cache/
+__pycache__/
+*cache*
+
+# --- User stuff ---
+zz*
+zz*/
+plans/
+tests/
+*.sofa
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
+
+# --- IDEs / Editors ---
+.vscode/
+.idea/
