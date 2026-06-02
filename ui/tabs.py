@@ -311,7 +311,8 @@ class DfhrtfTab(QWidget):
             "<p style='margin-top: 0px; margin-left: 10px;'>"
             "&bull; {filename} source SOFA filename;<br>"
             "&bull; {samplerate} source SOFA samplerate;<br>"
-            "&bull; {LR} L/R/Avg.</p>"
+            "&bull; {LR} L/R/Avg.;<br>"
+            "&bull; {algo} averaging algorithm (global average only).</p>"
         )
         self.dd_delimiter = FlameDropdown("Delimiter")
         self.dd_delimiter.setToolTip("<p>Text file delimiter.</p>")

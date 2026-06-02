@@ -45,15 +45,15 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
         if algo_name == "Arithmetic Mean":
             avg_norm = CurveAverager.arithmetic_mean(final_mags_2d)
         elif algo_name == "Geo-Arc-Length":
-            # Pre-scale data to simulate a y-weight of 0.05 in the distance calculation
-            scaled_mags = final_mags_2d * 0.05
+            # Pre-scale data to simulate a y-weight of 0.01 in the distance calculation
+            scaled_mags = final_mags_2d * 0.01
             scaled_avg = CurveAverager.geometric_arc_length_blend(norm_freqs, scaled_mags)
-            avg_norm = scaled_avg / 0.05
+            avg_norm = scaled_avg / 0.01
         elif algo_name == "Soft-DTW":
             log_callback(" -> Running Soft-DTW Barycenter (this may take a moment)...")
             # Note: tslearn SoftDTW doesn't natively support a simple stop callback mid-math easily here,
             # but we check between ears.
-            avg_norm = CurveAverager.soft_dtw_barycenter(final_mags_2d, gamma=0.05)
+            avg_norm = CurveAverager.soft_dtw_barycenter(final_mags_2d, gamma=0.01)
         else:
             avg_norm = CurveAverager.arithmetic_mean(final_mags_2d)
             
@@ -167,6 +167,8 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 fname = template.replace("{filename}", base_name)
                 fname = fname.replace("{samplerate}", sr_label)
                 fname = fname.replace("{LR}", lr_val)
+                # Remove {algo} and any preceding/succeeding underscores for per-sofa
+                fname = fname.replace("_{algo}", "").replace("{algo}_", "").replace("{algo}", "")
                 if not fname.endswith(ext): fname += ext
                 return os.path.join(output_root, fname)
 
@@ -230,16 +232,28 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         if df_cfg.get('avg_all') and generated_l_files:
             if stop_checker and stop_checker(): return False
             log_callback("\n--- Post-Processing: Global Averaging ---")
-            avg_dir = os.path.join(input_dir, "averages")
+            avg_dir = os.path.join(input_dir, "DFHRTF")
             os.makedirs(avg_dir, exist_ok=True)
             
-            algo = df_cfg.get('algo', 'Arithmetic Mean')
+            algo = df_cfg.get('algo', 'Soft-DTW')
             exclude = df_cfg.get('exclude_outliers', False)
             ext = f".{df_cfg.get('text_extension', 'txt')}"
             
-            run_averaging(generated_l_files, algo, exclude, os.path.join(avg_dir, f"Global_Avg_L{ext}"), delim, log_callback, stop_checker)
+            # Shorten algo name for filename
+            short_algo = {"Arithmetic Mean": "arithmean", "Geo-Arc-Length": "geoarc", "Soft-DTW": "softdtw"}.get(algo, "softdtw")
+            template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
+
+            def get_global_avg_path(lr_val):
+                fname = template.replace("{filename}", "dfhrtfs_avg")
+                fname = fname.replace("{samplerate}", "all")
+                fname = fname.replace("{LR}", lr_val)
+                fname = fname.replace("{algo}", short_algo)
+                if not fname.endswith(ext): fname += ext
+                return os.path.join(avg_dir, fname)
+            
+            run_averaging(generated_l_files, algo, exclude, get_global_avg_path("L"), delim, log_callback, stop_checker)
             if stop_checker and stop_checker(): return False
-            run_averaging(generated_r_files, algo, exclude, os.path.join(avg_dir, f"Global_Avg_R{ext}"), delim, log_callback, stop_checker)
+            run_averaging(generated_r_files, algo, exclude, get_global_avg_path("R"), delim, log_callback, stop_checker)
 
         return True
 

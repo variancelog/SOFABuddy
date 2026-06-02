@@ -21,6 +21,7 @@ class FlameToggleButton(QPushButton):
                     border-left: 4px #5aacdb;
                     border-style: inset;
                     padding: 8px 16px; /* top left bottom right */
+                    min-height: 32px;
                 }
                 QPushButton:disabled {
                     color: #111111;
@@ -28,6 +29,7 @@ class FlameToggleButton(QPushButton):
                     border-left: 4px #404952;
                     border-style: inset;
                     padding: 8px 16px; /* top left bottom right */
+                    min-height: 32px;
                 }
             """)
         else:
@@ -39,12 +41,14 @@ class FlameToggleButton(QPushButton):
                     border-left: 4px #888888;
                     border-style: inset;
                     padding: 8px 16px; /* top left bottom right */
+                    min-height: 32px;
                 }
                 QPushButton:disabled {
                     color: #111111;
                     border-left: 4px #444444;
                     border-style: inset;
                     padding: 8px 16px; /* top left bottom right */
+                    min-height: 32px;
                 }
             """)
 
@@ -62,6 +66,7 @@ class FlameDropdown(QComboBox):
                 color: white;
                 border: none;
                 padding: 8px 16px; /* top left bottom right */
+                min-height: 32px;
             }
             
             QComboBox::drop-down {
@@ -74,7 +79,7 @@ class FlameDropdown(QComboBox):
             QComboBox::down-arrow {
                 border-left: 5px solid transparent;
                 border-right: 5px solid transparent;
-                border-top: 6px solid white; 
+                border-top: 6px solid #5aacdb; 
                 width: 0px;
                 height: 0px;
                 margin-right: 16px; 
@@ -104,6 +109,7 @@ class FlameLineEdit(QLineEdit):
                 background-color: #444444; 
                 color: white; 
                 padding: 8px 16px; /* top left bottom right */
+                min-height: 32px;
                 border-top: 0px;
                 border-left: 0px;
                 border-right: 0px;
@@ -133,7 +139,8 @@ class FlameSliderLabel(QLabel):
             QLabel {
                 color: white; 
                 background-color: transparent; 
-                padding: 7px 16px 9px 16px; /* top left bottom right */
+                padding: 8px 16px; /* top left bottom right */
+                min-height: 32px;
             }
             QLabel:disabled {
                 color: #111111;
@@ -197,7 +204,7 @@ class FlameNumericSlider(QWidget):
         self.label_widget = FlameSliderLabel(self)
         
         self.edit_widget = QLineEdit()
-        self.edit_widget.setStyleSheet("color: white; background-color: #286C9E; padding: 8px 16px; border-bottom: 1px #111111 inset")
+        self.edit_widget.setStyleSheet("color: white; background-color: #286C9E; padding: 8px 16px; min-height: 32px; border-bottom: 1px #111111 inset")
         self.edit_widget.hide()
         
         self.layout.addWidget(self.label_widget)

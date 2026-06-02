@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QPlainTextEdit
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QPlainTextEdit, QSplitter
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor
 from ui.tabs import FilesTab, SofaTab, DfhrtfTab
@@ -19,6 +19,15 @@ class SofaBuddyMainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         self.layout = QVBoxLayout(central_widget)
         
+        # Splitter
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        self.layout.addWidget(splitter)
+        
+        # Top Pane
+        top_pane = QWidget()
+        top_layout = QVBoxLayout(top_pane)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        
         # Navigation Bar
         nav_layout = QHBoxLayout()
         self.btn_nav_files = QPushButton("Files (0)")
@@ -32,17 +41,17 @@ class SofaBuddyMainWindow(QMainWindow):
                     color: white; 
                     border: none; 
                     padding: 10px;
+                    min-height: 25px;
                 }
                 QPushButton:checked {
                     background-color: #666666;
                 }
             """)
             btn.setCheckable(True)
-            nav_layout.addWidget(btn)
+            nav_layout.addWidget(btn, stretch=1)
             
         self.btn_nav_files.setChecked(True)
-            
-        self.layout.addLayout(nav_layout)
+        top_layout.addLayout(nav_layout)
         
         # Stacked Widget
         self.stacked_widget = QStackedWidget()
@@ -54,18 +63,24 @@ class SofaBuddyMainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.tab_sofa)
         self.stacked_widget.addWidget(self.tab_dfhrtf)
         
-        self.layout.addWidget(self.stacked_widget, stretch=3)
+        top_layout.addWidget(self.stacked_widget)
         
         # Action Bar
         self.btn_process = QPushButton("Start Processing")
         self.btn_process.setStyleSheet("background-color: #286C9E; color: white; padding: 12px; font-weight: bold;")
-        self.layout.addWidget(self.btn_process)
+        top_layout.addWidget(self.btn_process)
+        
+        splitter.addWidget(top_pane)
         
         # Console
         self.console = QPlainTextEdit()
         self.console.setReadOnly(True)
+        self.console.setMinimumHeight(200)
         self.console.setStyleSheet("background-color: #111111; color: #EEEEEE; font-family: Roboto Mono; padding: 8px 12px;")
-        self.layout.addWidget(self.console, stretch=1)
+        splitter.addWidget(self.console)
+        
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         
         # Connections
         self.btn_nav_files.clicked.connect(lambda: self._switch_tab(0))
@@ -76,8 +91,18 @@ class SofaBuddyMainWindow(QMainWindow):
         self.tab_dfhrtf.dfhrtf_toggled.connect(self._on_dfhrtf_toggled)
         self.btn_process.clicked.connect(self._on_process_clicked)
         
+        # Connect file list model signals to update nav count
+        file_list_model = self.tab_files.file_list.model()
+        file_list_model.rowsInserted.connect(self._update_file_count)
+        file_list_model.rowsRemoved.connect(self._update_file_count)
+        file_list_model.modelReset.connect(self._update_file_count)
+        
         # Worker ref
         self.worker = None
+
+    def _update_file_count(self):
+        total = self.tab_files.file_list.count()
+        self.btn_nav_files.setText(f"Files ({total})")
 
     def _switch_tab(self, index):
         self.stacked_widget.setCurrentIndex(index)
@@ -133,8 +158,6 @@ class SofaBuddyMainWindow(QMainWindow):
                 self.append_error(f"Error: Skipped invalid file '{file_path}'. Only .sofa files are supported.")
                 
         if added > 0:
-            total = self.tab_files.file_list.count()
-            self.btn_nav_files.setText(f"Files ({total})")
             self._switch_tab(0)
 
     def _on_process_clicked(self):
