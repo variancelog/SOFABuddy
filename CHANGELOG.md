@@ -1,3 +1,15 @@
+## 2026-06-04
+
+### Added
+- Added `ui/theme.py` as a single source of truth for all UI colors and sizing constants; refactored inline stylesheets across `main_window.py`, `tabs.py`, and `widgets.py` to reference it.
+- Bundled Roboto and Roboto Mono font faces in `ui/fonts/`, auto-registered at startup via `QFontDatabase` (`_load_bundled_fonts` in `main.pyw`), with graceful fallback to system fonts when absent.
+
+### Changed
+- Migrated the UI framework from PyQt6 to PySide6 (`pyqtSignal` → `Signal`); updated `requirements.txt` accordingly and added the `sofar` dependency.
+- Standardized all interactive control heights to 40px via `theme.CONTROL_HEIGHT` for consistent vertical alignment.
+- Added a 120px minimum width to the first grid column of the SOFA and DFHRTF tabs to align setting labels.
+- Made `FlameLabel` backgrounds transparent and tidied control padding for consistent spacing.
+
 ## 2026-06-01
 
 ### Added

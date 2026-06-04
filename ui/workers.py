@@ -1,11 +1,11 @@
-from PyQt6.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 from core.sofa_processor import process_sofa_exports
 
 class ProcessingWorker(QThread):
-    progress = pyqtSignal(int, str)
-    log = pyqtSignal(str)
-    finished = pyqtSignal(bool)
-    error = pyqtSignal(str)
+    progress = Signal(int, str)
+    log = Signal(str)
+    finished = Signal(bool)
+    error = Signal(str)
 
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
