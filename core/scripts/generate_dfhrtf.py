@@ -185,6 +185,7 @@ def main():
     parser.add_argument("--text-out-avg", help="Explicit path for Average text output")
     parser.add_argument("--graph-out", help="Explicit path for Graph plot output")
     parser.add_argument("--graph-stereo-out", help="Explicit path for Stereo graph plot output")
+    parser.add_argument("--graph-eval-out", help="Explicit path for Evaluation Grid plot output")
     parser.add_argument("--delimiter", default="\t", help="Delimiter for text outputs")
     
     # Refinement Parameters
@@ -211,7 +212,28 @@ def main():
     sofa = sf.read_sofa(args.input)
     hrirs = sofa.Data_IR
     fs = float(sofa.Data_SamplingRate)
-    
+
+    # 1.5 Evaluation Grid Plot (depends only on SourcePosition — run before FFT pipeline)
+    if args.graph_eval_out:
+        print("   -> Plotting Evaluation Grid...")
+        src = sofa.SourcePosition
+        n_nodes = src.shape[0]
+        radii = np.round(src[:, 2], decimals=3)
+        vals, counts = np.unique(radii, return_counts=True)
+        dom_r = vals[np.argmax(counts)]
+        cart = spherical_to_cartesian(1.0, src[:, 0], src[:, 1])
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(cart[:, 0], cart[:, 1], cart[:, 2], c='black', s=4)
+        ax.set_title(f"{dom_r:g} m radius, {n_nodes} nodes")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        ax.set_box_aspect([1, 1, 1])
+        plt.savefig(args.graph_eval_out, dpi=150)
+        print(f"   [+] Saved Eval Grid: {os.path.basename(args.graph_eval_out)}")
+        plt.close()
+
     # 2. Compute Diffuse Field Response
     weights = calculate_geometric_weights(sofa.SourcePosition, advanced_dfeq=args.advanced_dfeq)
     n_fft = 16384
