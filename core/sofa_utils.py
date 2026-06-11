@@ -34,6 +34,23 @@ def get_sofa_metadata(file_path: str) -> dict:
         print(f"Error reading SOFA metadata for {file_path}: {e}")
         return None
 
+def calculate_grid_radius(file_path: str) -> float:
+    """
+    Returns the dominant (most common) grid radius in metres from SourcePosition,
+    matching the radius reported by the Evaluation Grids plot.
+    """
+    try:
+        with nc.Dataset(file_path, 'r') as ds:
+            src_var = ds.variables.get('SourcePosition')
+            if src_var is None: return 0.0
+            src = src_var[:]              # (M, 3) -> [az, el, radius]
+            radii = np.round(src[:, 2], decimals=3)
+            vals, counts = np.unique(radii, return_counts=True)
+            return float(vals[np.argmax(counts)])
+    except Exception as e:
+        print(f"Error calculating grid radius for {file_path}: {e}")
+        return 0.0
+
 def calculate_max_itd(file_path: str) -> float:
     """
     Calculates the maximum ITD (in ms) by finding peak impulse indices across all measurements.

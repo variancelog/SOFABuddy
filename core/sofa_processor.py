@@ -21,19 +21,27 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
             error_callback(f"Backend script not found: {script_master}")
             return False
 
-        # 1. Determine Output Root
+        # 1. Determine Output Mode
         if not files:
             return True
 
-        input_dir = os.path.dirname(files[0])
-        output_root = os.path.join(input_dir, "sofa_mastered")
-        os.makedirs(output_root, exist_ok=True)
+        out_cfg = config.get('output', {})
+        use_default = out_cfg.get('default', True)
+        custom_dir = out_cfg.get('folder', '').strip()
+        if not use_default and not custom_dir:
+            error_callback("Output Folder: No custom folder selected. Choose a folder or switch to Default.")
+            return False
 
         # 2. Build Task List
         tasks = []
         for file_path in files:
             base_name = os.path.splitext(os.path.basename(file_path))[0]
-            
+
+            # Per-file output root: default -> each file's own folder; custom -> shared folder
+            base_dir = os.path.dirname(file_path) if use_default else custom_dir
+            out_root = os.path.join(base_dir, "sofa_mastered")
+            os.makedirs(out_root, exist_ok=True)
+
             for sr in sofa_cfg.get('samplerates', []):
                 eq_modes = []
                 if sofa_cfg.get('uneq'): eq_modes.append(('uneq', False))
@@ -48,7 +56,7 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
                     if not out_filename.lower().endswith(".sofa"):
                         out_filename += ".sofa"
                         
-                    out_path = os.path.join(output_root, out_filename)
+                    out_path = os.path.join(out_root, out_filename)
                     
                     cmd = [
                         sys.executable, "-u", script_master,

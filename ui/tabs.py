@@ -3,17 +3,23 @@ from PySide6.QtCore import Signal
 
 from ui.widgets import FlameToggleButton, FlameDropdown, FlameNumericSlider, FlameLabel, FlameLineEdit
 from ui.theme import BG_WIDGET, BG_CONTROL, ACCENT, FG, CONTROL_HEIGHT
-from core.sofa_utils import get_sofa_metadata, calculate_max_itd
+from core.sofa_utils import get_sofa_metadata, calculate_max_itd, calculate_grid_radius
 
 # --- Files Tab Widget ---
 class FilesTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.layout = QHBoxLayout(self)
+        self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
 
-        self._itd_cache = {} # Cache for calculated ITDs
+        self._itd_cache = {}    # Cache for calculated ITDs
+        self._radius_cache = {} # Cache for calculated grid radii
+
+        # --- Top content: file list + right panel ---
+        content = QHBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(0)
 
         # - File list
         self.file_list = QListWidget()
@@ -26,7 +32,7 @@ class FilesTab(QWidget):
                 margin-top: 10px;
             }}
         """)
-        self.layout.addWidget(self.file_list, stretch=2)
+        content.addWidget(self.file_list, stretch=2)
 
         right_panel = QVBoxLayout()
 
@@ -74,21 +80,108 @@ class FilesTab(QWidget):
         itd_layout.addWidget(self.btn_calc_itd)
         itd_layout.addStretch()
 
+        # Grid Radius Row
+        radius_layout = QHBoxLayout()
+        radius_layout.setContentsMargins(0, 0, 0, 0)
+        radius_layout.addWidget(FlameLabel("Grid Radius: "))
+        self.lbl_radius_val = FlameLabel("-")
+        self.btn_calc_radius = QPushButton("Calculate")
+        self.btn_calc_radius.setToolTip("Calculate Grid Radius")
+        self.btn_calc_radius.setFixedWidth(80)
+        self.btn_calc_radius.setStyleSheet(
+            f"background-color: {ACCENT}; color: {FG}; border: none; font-size: 10px; padding: 2px;"
+        )
+        self.btn_calc_radius.clicked.connect(self._on_calc_radius_clicked)
+        radius_layout.addWidget(self.lbl_radius_val)
+        radius_layout.addWidget(self.btn_calc_radius)
+        radius_layout.addStretch()
+
         info_layout.addWidget(self.lbl_samplerate)
         info_layout.addWidget(self.lbl_length)
         info_layout.addWidget(self.lbl_points)
         info_layout.addLayout(itd_layout)
+        info_layout.addLayout(radius_layout)
 
         right_panel.addWidget(self.info_group)
         right_panel.addStretch()
 
-        self.layout.addLayout(right_panel, stretch=1)
+        content.addLayout(right_panel, stretch=1)
+        self.layout.addLayout(content)
 
         self.file_list.itemSelectionChanged.connect(self._on_file_selection_changed)
+
+        # --- Output Folder row (spans full width at bottom) ---
+        out_row = QHBoxLayout()
+        out_row.setContentsMargins(0, 6, 0, 0)
+        out_row.setSpacing(8)
+        out_row.addWidget(FlameLabel("Output:"))
+
+        self.btn_output_default = FlameToggleButton("Default")
+        self.btn_output_default.setToolTip(
+            "<p>Each file's outputs go to <b>sofa_mastered/</b> and <b>DFHRTF/</b> subfolders "
+            "inside its own source folder. Global averaging produces a per-folder average.</p>"
+        )
+        self.btn_output_default.setChecked(True)
+        self.btn_output_custom = FlameToggleButton("Custom:")
+        self.btn_output_custom.setToolTip(
+            "<p>All outputs go under the chosen folder (with <b>sofa_mastered/</b> and <b>DFHRTF/</b> subfolders). "
+            "Global averaging produces a single average across all files.</p>"
+        )
+        self.edit_output_folder = FlameLineEdit("")
+        self.edit_output_folder.setToolTip("<p>Root folder for all outputs (sofa_mastered/ and DFHRTF/ will be created inside it).</p>")
+        self.edit_output_folder.setEnabled(False)
+        self.btn_output_browse = QPushButton("...")
+        self.btn_output_browse.setEnabled(False)
+        self.btn_output_browse.setFixedWidth(40)
+        self.btn_output_browse.setStyleSheet(
+            f"background-color: {BG_CONTROL}; color: {FG}; border: none; "
+            f"min-height: {CONTROL_HEIGHT}px; max-height: {CONTROL_HEIGHT}px;"
+        )
+
+        self.btn_output_default.toggled.connect(self._on_output_default_toggled)
+        self.btn_output_custom.toggled.connect(self._on_output_custom_toggled)
+        self.btn_output_browse.clicked.connect(self._browse_output_folder)
+
+        out_row.addWidget(self.btn_output_default)
+        out_row.addWidget(self.btn_output_custom)
+        out_row.addWidget(self.edit_output_folder, stretch=1)
+        out_row.addWidget(self.btn_output_browse)
+        self.layout.addLayout(out_row)
+
+    def _set_toggle(self, btn, value):
+        btn.blockSignals(True)
+        btn.setChecked(value)
+        btn.update_style()
+        btn.blockSignals(False)
+
+    def _on_output_default_toggled(self, checked):
+        if checked:
+            self._set_toggle(self.btn_output_custom, False)
+        elif not self.btn_output_custom.isChecked():
+            self._set_toggle(self.btn_output_default, True)
+        self._sync_output_enabled()
+
+    def _on_output_custom_toggled(self, checked):
+        if checked:
+            self._set_toggle(self.btn_output_default, False)
+        elif not self.btn_output_default.isChecked():
+            self._set_toggle(self.btn_output_default, True)
+        self._sync_output_enabled()
+
+    def _sync_output_enabled(self):
+        on = self.btn_output_custom.isChecked()
+        self.edit_output_folder.setEnabled(on)
+        self.btn_output_browse.setEnabled(on)
+
+    def _browse_output_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
+        if folder:
+            self.edit_output_folder.setText(folder)
 
     def _clear_list(self):
         self.file_list.clear()
         self._itd_cache.clear()
+        self._radius_cache.clear()
 
     def _on_file_selection_changed(self):
         selected = self.file_list.selectedItems()
@@ -99,6 +192,9 @@ class FilesTab(QWidget):
             self.lbl_itd_val.setText("-")
             self.btn_calc_itd.hide()
             self.lbl_itd_val.show()
+            self.lbl_radius_val.setText("-")
+            self.btn_calc_radius.hide()
+            self.lbl_radius_val.show()
             return
 
         file_path = selected[0].text()
@@ -119,6 +215,17 @@ class FilesTab(QWidget):
                 self.btn_calc_itd.setText("Calculate")
                 self.btn_calc_itd.setEnabled(True)
                 self.btn_calc_itd.show()
+
+            # Update Grid Radius display from cache
+            if file_path in self._radius_cache:
+                self.lbl_radius_val.setText(f"{self._radius_cache[file_path]:.2f} m")
+                self.btn_calc_radius.hide()
+                self.lbl_radius_val.show()
+            else:
+                self.lbl_radius_val.hide()
+                self.btn_calc_radius.setText("Calculate")
+                self.btn_calc_radius.setEnabled(True)
+                self.btn_calc_radius.show()
         else:
             self.lbl_samplerate.setText("Samplerate: ERROR")
             self.lbl_length.setText("Length: -")
@@ -126,6 +233,9 @@ class FilesTab(QWidget):
             self.lbl_itd_val.setText("-")
             self.btn_calc_itd.hide()
             self.lbl_itd_val.show()
+            self.lbl_radius_val.setText("-")
+            self.btn_calc_radius.hide()
+            self.lbl_radius_val.show()
 
     def _on_calc_itd_clicked(self):
         selected = self.file_list.selectedItems()
@@ -143,6 +253,22 @@ class FilesTab(QWidget):
         self.btn_calc_itd.hide()
         self.lbl_itd_val.show()
 
+    def _on_calc_radius_clicked(self):
+        selected = self.file_list.selectedItems()
+        if not selected: return
+
+        file_path = selected[0].text()
+        self.btn_calc_radius.setText("...")
+        self.btn_calc_radius.setEnabled(False)
+        self.repaint() # Force UI update to show "..."
+
+        radius_m = calculate_grid_radius(file_path)
+        self._radius_cache[file_path] = radius_m
+
+        self.lbl_radius_val.setText(f"{radius_m:.2f} m")
+        self.btn_calc_radius.hide()
+        self.lbl_radius_val.show()
+
     def _open_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Select SOFA files", "", "SOFA Files (*.sofa *.SOFA)")
         if files:
@@ -158,6 +284,12 @@ class FilesTab(QWidget):
 
     def get_config(self) -> list:
         return [self.file_list.item(i).text() for i in range(self.file_list.count())]
+
+    def get_output_config(self) -> dict:
+        return {
+            'default': self.btn_output_default.get_value(),
+            'folder': self.edit_output_folder.text().strip()
+        }
 
 # --- SOFA Tab Widget
 class SofaTab(QWidget):

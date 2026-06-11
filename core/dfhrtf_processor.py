@@ -92,93 +92,107 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
         script_dfhrtf = os.path.join(scripts_dir, "generate_dfhrtf.py")
 
-        # 1. Determine Input Files
-        resolved_inputs = []
+        # 1. Determine Output Mode (app-level setting from FilesTab)
+        out_cfg = config.get('output', {})
+        use_default = out_cfg.get('default', True)
+        custom_dir = out_cfg.get('folder', '').strip()
+        if not use_default and not custom_dir:
+            error_callback("Output Folder: No custom folder selected. Choose a folder or switch to Default.")
+            return False
+
+        # Hoist delimiter computation so it's available for averaging even if no files ran
+        delim_map = {"Tab": "\t", "Comma": ",", "Semicolon": ";", "Space": " "}
+        delim = delim_map.get(df_cfg.get('text_delimiter', "Tab"), "\t")
+
+        # 2. Determine Input Files
+        resolved_inputs = []  # (input_path, base_name, sr_label, src_dir)
         sofa_cfg = config.get('sofa', {})
-        
+
         if sofa_cfg.get('enabled'):
             log_callback("DFHRTF: Searching for generated mastered SOFA files...")
             for raw_path in files:
                 if stop_checker and stop_checker(): return False
                 base_name = os.path.splitext(os.path.basename(raw_path))[0]
-                input_dir = os.path.dirname(raw_path)
-                mastered_dir = os.path.join(input_dir, "sofa_mastered")
-                
+                src_dir = os.path.dirname(raw_path)
+
+                # Mastered SOFAs live where sofa_processor wrote them
+                base_dir = src_dir if use_default else custom_dir
+                mastered_dir = os.path.join(base_dir, "sofa_mastered")
+
                 if not os.path.exists(mastered_dir):
                     log_callback(f" [!] Warning: Mastered dir not found for {base_name}. Using raw file.")
-                    resolved_inputs.append((raw_path, base_name, "raw"))
+                    resolved_inputs.append((raw_path, base_name, "raw", src_dir))
                     continue
 
                 pattern = os.path.join(mastered_dir, f"*{base_name}*.sofa")
                 candidates = glob.glob(pattern)
                 if not candidates:
-                    resolved_inputs.append((raw_path, base_name, "raw"))
+                    resolved_inputs.append((raw_path, base_name, "raw", src_dir))
                     continue
 
                 uneq_candidates = [c for c in candidates if "uneq" in c.lower()]
                 target_list = uneq_candidates if uneq_candidates else candidates
-                
+
                 def get_sr(path):
                     import re
                     match = re.search(r'(\d+)', os.path.basename(path))
                     return int(match.group(1)) if match else 0
-                
+
                 target_list.sort(key=get_sr, reverse=True)
                 target_path = target_list[0]
-                resolved_inputs.append((target_path, base_name, str(get_sr(target_path))))
+                resolved_inputs.append((target_path, base_name, str(get_sr(target_path)), src_dir))
         else:
             for f in files:
                 if stop_checker and stop_checker(): return False
-                resolved_inputs.append((f, os.path.splitext(os.path.basename(f))[0], "raw"))
+                resolved_inputs.append((f, os.path.splitext(os.path.basename(f))[0], "raw", os.path.dirname(f)))
 
-        # 2. Setup Output Dir
-        input_dir = os.path.dirname(files[0])
-        output_root = os.path.join(input_dir, "DFHRTF")
-        os.makedirs(output_root, exist_ok=True)
-
-        # Track generated files for post-averaging
-        generated_l_files = []
-        generated_r_files = []
+        # Track generated L/R files grouped by output directory for per-group averaging
+        # groups[output_root] = {'l': [...], 'r': [...]}
+        groups = {}
 
         # 3. Execution
         total_inputs = len(resolved_inputs)
-        for i, (input_path, base_name, sr_label) in enumerate(resolved_inputs):
+        for i, (input_path, base_name, sr_label, src_dir) in enumerate(resolved_inputs):
             if stop_checker and stop_checker(): return False
 
             progress_val = int((i / total_inputs) * 100)
             progress_callback(progress_val, f"Analyzing: {base_name}")
-            
+
+            # Per-file DFHRTF output root
+            base_dir = src_dir if use_default else custom_dir
+            output_root = os.path.join(base_dir, "DFHRTF")
+            os.makedirs(output_root, exist_ok=True)
+
             cmd = [sys.executable, "-u", script_dfhrtf, "--input", input_path]
             cmd.extend(["--smoothing", str(df_cfg.get('smoothing', 48))])
             cmd.extend(["--tilt", str(df_cfg.get('tilt', 0.0))])
             if df_cfg.get('extend_lf'):
                 cmd.append("--lf_ext_dfhrtf")
                 cmd.extend(["--lf_ext_dfhrtf_xover", str(df_cfg.get('xover', 375.0))])
-            
-            delim_map = {"Tab": "\t", "Comma": ",", "Semicolon": ";", "Space": " "}
-            delim = delim_map.get(df_cfg.get('text_delimiter', "Tab"), "\t")
+
             cmd.extend(["--delimiter", delim])
-            
+
             # Text Outputs
             ext = f".{df_cfg.get('text_extension', 'txt')}"
             template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
-            
-            def get_text_path(lr_val):
-                fname = template.replace("{filename}", base_name)
-                fname = fname.replace("{samplerate}", sr_label)
+
+            def get_text_path(lr_val, _base=base_name, _sr=sr_label, _ext=ext, _root=output_root, _tmpl=template):
+                fname = _tmpl.replace("{filename}", _base)
+                fname = fname.replace("{samplerate}", _sr)
                 fname = fname.replace("{LR}", lr_val)
                 # Remove {algo} and any preceding/succeeding underscores for per-sofa
                 fname = fname.replace("_{algo}", "").replace("{algo}_", "").replace("{algo}", "")
-                if not fname.endswith(ext): fname += ext
-                return os.path.join(output_root, fname)
+                if not fname.endswith(_ext): fname += _ext
+                return os.path.join(_root, fname)
 
             if df_cfg.get('per_sofa_lr'):
                 path_l = get_text_path("L")
                 path_r = get_text_path("R")
                 cmd.extend(["--text-out-l", path_l, "--text-out-r", path_r])
-                generated_l_files.append(path_l)
-                generated_r_files.append(path_r)
-            
+                grp = groups.setdefault(output_root, {'l': [], 'r': []})
+                grp['l'].append(path_l)
+                grp['r'].append(path_r)
+
             if df_cfg.get('per_sofa_avg'):
                 cmd.extend(["--text-out-avg", get_text_path("Avg")])
 
@@ -186,21 +200,18 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             if df_cfg.get('dfhrtf_graphs'):
                 graph_template = df_cfg.get('graph_filename', "{filename}")
                 graph_ext = f".{df_cfg.get('graph_extension', 'png')}"
-                
-                # Replace both variables
+
                 gname = graph_template.replace("{filename}", base_name).replace("{graphtype}", "df")
-                
                 if not gname.endswith(graph_ext): gname += graph_ext
                 cmd.extend(["--graph-out", os.path.join(output_root, gname)])
 
             if df_cfg.get('stereo_graphs'):
                 graph_template = df_cfg.get('graph_filename', "{filename}")
                 graph_ext = f".{df_cfg.get('graph_extension', 'png')}"
-                
-                # Replace both variables
+
                 sname = graph_template.replace("{filename}", base_name).replace("{graphtype}", "stereo")
-                
-                # Fallback: If {graphtype} wasn't used in the template, append '_stereo' manually 
+
+                # Fallback: If {graphtype} wasn't used in the template, append '_stereo' manually
                 # so stereo graphs don't overwrite DF graphs.
                 if "{graphtype}" not in graph_template:
                     if sname.endswith(graph_ext):
@@ -209,13 +220,13 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                         sname += "_stereo" + graph_ext
                 else:
                     if not sname.endswith(graph_ext): sname += graph_ext
-                        
+
                 cmd.extend(["--graph-stereo-out", os.path.join(output_root, sname)])
 
             # Run Subprocess
             creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, creationflags=creation_flags
             )
             for line in iter(process.stdout.readline, ''):
@@ -228,32 +239,36 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             rc = process.wait()
             if rc != 0: error_callback(f"Analysis failed for {base_name}")
 
-        # 4. Post-Processing: Global Averaging
-        if df_cfg.get('avg_all') and generated_l_files:
-            if stop_checker and stop_checker(): return False
-            log_callback("\n--- Post-Processing: Global Averaging ---")
-            avg_dir = os.path.join(input_dir, "DFHRTF")
-            os.makedirs(avg_dir, exist_ok=True)
-            
+        # 4. Post-Processing: Averaging (per output-folder group)
+        # Default mode: one group per source folder -> per-folder average
+        # Custom mode: all files share one output_root -> single global average
+        if df_cfg.get('avg_all') and groups:
             algo = df_cfg.get('algo', 'Soft-DTW')
             exclude = df_cfg.get('exclude_outliers', False)
             ext = f".{df_cfg.get('text_extension', 'txt')}"
-            
-            # Shorten algo name for filename
             short_algo = {"Arithmetic Mean": "arithmean", "Geo-Arc-Length": "geoarc", "Soft-DTW": "softdtw"}.get(algo, "softdtw")
-            template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
+            avg_template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
 
-            def get_global_avg_path(lr_val):
-                fname = template.replace("{filename}", "dfhrtfs_avg")
-                fname = fname.replace("{samplerate}", "all")
-                fname = fname.replace("{LR}", lr_val)
-                fname = fname.replace("{algo}", short_algo)
-                if not fname.endswith(ext): fname += ext
-                return os.path.join(avg_dir, fname)
-            
-            run_averaging(generated_l_files, algo, exclude, get_global_avg_path("L"), delim, log_callback, stop_checker)
-            if stop_checker and stop_checker(): return False
-            run_averaging(generated_r_files, algo, exclude, get_global_avg_path("R"), delim, log_callback, stop_checker)
+            for out_dir, grp in groups.items():
+                if not grp['l']:
+                    continue
+                if stop_checker and stop_checker(): return False
+
+                label = "Per-Folder Average" if len(groups) > 1 else "Global Average"
+                log_callback(f"\n--- Post-Processing: {label} ({os.path.basename(out_dir) or out_dir}) ---")
+                os.makedirs(out_dir, exist_ok=True)
+
+                def get_avg_path(lr_val, _dir=out_dir, _tmpl=avg_template, _ext=ext, _algo=short_algo):
+                    fname = _tmpl.replace("{filename}", "dfhrtfs_avg")
+                    fname = fname.replace("{samplerate}", "all")
+                    fname = fname.replace("{LR}", lr_val)
+                    fname = fname.replace("{algo}", _algo)
+                    if not fname.endswith(_ext): fname += _ext
+                    return os.path.join(_dir, fname)
+
+                run_averaging(grp['l'], algo, exclude, get_avg_path("L"), delim, log_callback, stop_checker)
+                if stop_checker and stop_checker(): return False
+                run_averaging(grp['r'], algo, exclude, get_avg_path("R"), delim, log_callback, stop_checker)
 
         return True
 

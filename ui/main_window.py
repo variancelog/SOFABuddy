@@ -175,8 +175,9 @@ class SofaBuddyMainWindow(QMainWindow):
             return
 
         config = {
-            'files': self.tab_files.get_config(),
-            'sofa': self.tab_sofa.get_config(),
+            'files':  self.tab_files.get_config(),
+            'output': self.tab_files.get_output_config(),
+            'sofa':   self.tab_sofa.get_config(),
             'dfhrtf': self.tab_dfhrtf.get_config()
         }
 
