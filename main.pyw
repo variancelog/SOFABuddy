@@ -18,6 +18,12 @@ def _load_bundled_fonts():
 def main():
     app = QApplication(sys.argv)
 
+    # Required for QStandardPaths to resolve the correct per-user config dir
+    # on all platforms (Windows: %LOCALAPPDATA%\SOFA Buddy,
+    # Linux: ~/.config/SOFA Buddy, macOS: ~/Library/Preferences/SOFA Buddy)
+    app.setOrganizationName("SOFA Buddy")
+    app.setApplicationName("SOFA Buddy")
+
     _load_bundled_fonts()
 
     # Import theme after QApplication is created (avoids any Qt init ordering issues)

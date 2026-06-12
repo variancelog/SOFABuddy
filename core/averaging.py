@@ -85,7 +85,7 @@ class DataIngestor:
 
 class CommonAxisInterpolator:
     @staticmethod
-    def interpolate_to_common_axis(dataframes: List[pd.DataFrame], num_points: int = 384) -> Dict:
+    def interpolate_to_common_axis(dataframes: List[pd.DataFrame], num_points: int = 512) -> Dict:
         """
         Takes a list of dataframes and maps them to a rigid common frequency axis.
         Normalizes both axes (log-frequency and magnitude) to [0.0, 1.0] before returning.
@@ -263,37 +263,38 @@ class CurveAverager:
         return current_avg
 
     @staticmethod
-    def soft_dtw_barycenter(norm_mags_2d: np.ndarray, gamma: float = 1.0, progress_queue = None) -> np.ndarray:
+    def soft_dtw_barycenter(norm_mags_2d: np.ndarray, gamma: float = 0.01,
+                             max_iter: int = 25, tol: float = 1e-3,
+                             progress_queue=None) -> np.ndarray:
         """Smooth shape-preserving mean using Regularized Soft-DTW."""
         if len(norm_mags_2d) == 0:
             return np.array([])
-            
+
         ts_data = np.expand_dims(norm_mags_2d, axis=-1)
         weights = np.ones(len(ts_data)) / len(ts_data)
-        
+
         # Initialize with Euclidean barycenter (arithmetic mean)
         init_barycenter = np.mean(ts_data, axis=0)
-        
-        max_iter = 25
+
         state = {'iter': 0}
         total_curves = len(ts_data)
-        
+
         if progress_queue is not None:
             progress_queue.put(("init_progress", max_iter * total_curves))
-        
+
         def callback(xk):
             state['iter'] += 1
 
         res = minimize(
-            _softdtw_func, 
-            init_barycenter.ravel(), 
+            _softdtw_func,
+            init_barycenter.ravel(),
             args=(ts_data, weights, init_barycenter.shape, gamma, progress_queue, state, max_iter),
-            method="L-BFGS-B", 
-            jac=True, 
-            tol=1e-3,
+            method="L-BFGS-B",
+            jac=True,
+            tol=tol,
             callback=callback,
             options=dict(maxiter=max_iter)
         )
-        
+
         barycenter = res.x.reshape(init_barycenter.shape)
         return barycenter.flatten()

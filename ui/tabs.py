@@ -1,9 +1,9 @@
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QPushButton, QGroupBox, QLabel, QGridLayout, QLineEdit, QFileDialog
-from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QPushButton, QGroupBox, QLabel, QGridLayout, QLineEdit, QFileDialog, QMenu
+from PySide6.QtCore import Signal, Qt
 
 from ui.widgets import FlameToggleButton, FlameDropdown, FlameNumericSlider, FlameLabel, FlameLineEdit
 from ui.theme import BG_WIDGET, BG_CONTROL, ACCENT, FG, CONTROL_HEIGHT
-from core.sofa_utils import get_sofa_metadata, calculate_max_itd, calculate_grid_radius
+from core.sofa_utils import get_sofa_metadata, calculate_max_itd, calculate_grid_radius, get_grid_cartesian
 
 # --- Files Tab Widget ---
 class FilesTab(QWidget):
@@ -40,21 +40,38 @@ class FilesTab(QWidget):
         self.btn_open_files.setToolTip("Add Files")
         self.btn_open_folder = QPushButton("Add Folder")
         self.btn_open_folder.setToolTip("Add Folder")
-        self.btn_clear_list = QPushButton("Clear List")
-        self.btn_clear_list.setToolTip("Clear List")
+        self.btn_remove_selected = QPushButton("Remove Selected")
+        self.btn_remove_selected.setToolTip("Remove the selected file from the list")
+        self.btn_remove_selected.setEnabled(False)
+        self.btn_clear_list = QPushButton("Clear All")
+        self.btn_clear_list.setToolTip("Clear all files from the list")
 
-        for btn in [self.btn_open_files, self.btn_open_folder, self.btn_clear_list]:
-            btn.setStyleSheet(
-                f"background-color: {BG_CONTROL}; color: {FG}; border: none; "
-                f"padding: 0px 10px; "
-                f"min-height: {CONTROL_HEIGHT}px; max-height: {CONTROL_HEIGHT}px; "
-                f"margin-top: 10px; margin-left: 5px;"
-            )
-            right_panel.addWidget(btn)
+        btn_style = (
+            f"background-color: {BG_CONTROL}; color: {FG}; border: none; "
+            f"padding: 0px 10px; "
+            f"min-height: {CONTROL_HEIGHT}px; max-height: {CONTROL_HEIGHT}px; "
+            f"margin-top: 10px; margin-left: 5px;"
+        )
+        for btn in [self.btn_open_files, self.btn_open_folder,
+                    self.btn_remove_selected, self.btn_clear_list]:
+            btn.setStyleSheet(btn_style)
+
+        btn_grid = QGridLayout()
+        btn_grid.setSpacing(0)
+        btn_grid.addWidget(self.btn_open_files,      0, 0)
+        btn_grid.addWidget(self.btn_open_folder,     0, 1)
+        btn_grid.addWidget(self.btn_remove_selected, 1, 0)
+        btn_grid.addWidget(self.btn_clear_list,      1, 1)
+        right_panel.addLayout(btn_grid)
 
         self.btn_open_files.clicked.connect(self._open_files)
         self.btn_open_folder.clicked.connect(self._open_folder)
+        self.btn_remove_selected.clicked.connect(self._remove_selected)
         self.btn_clear_list.clicked.connect(self._clear_list)
+
+        # Right-click context menu on the file list
+        self.file_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.file_list.customContextMenuRequested.connect(self._show_file_context_menu)
 
         self.info_group = QGroupBox("File Info")
         self.info_group.setStyleSheet(f"color: {FG}; border: 1px solid {BG_CONTROL}; margin-top: 10px;")
@@ -96,11 +113,25 @@ class FilesTab(QWidget):
         radius_layout.addWidget(self.btn_calc_radius)
         radius_layout.addStretch()
 
+        # View Grid Row
+        grid_view_layout = QHBoxLayout()
+        grid_view_layout.setContentsMargins(0, 0, 0, 0)
+        self.btn_view_grid = QPushButton("View Grid")
+        self.btn_view_grid.setToolTip("Plot the measurement grid for the selected SOFA file")
+        self.btn_view_grid.setStyleSheet(
+            f"background-color: {ACCENT}; color: {FG}; border: none; font-size: 10px; padding: 2px;"
+        )
+        self.btn_view_grid.setEnabled(False)
+        self.btn_view_grid.clicked.connect(self._on_view_grid_clicked)
+        grid_view_layout.addWidget(self.btn_view_grid)
+        grid_view_layout.addStretch()
+
         info_layout.addWidget(self.lbl_samplerate)
         info_layout.addWidget(self.lbl_length)
         info_layout.addWidget(self.lbl_points)
         info_layout.addLayout(itd_layout)
         info_layout.addLayout(radius_layout)
+        info_layout.addLayout(grid_view_layout)
 
         right_panel.addWidget(self.info_group)
         right_panel.addStretch()
@@ -114,15 +145,15 @@ class FilesTab(QWidget):
         out_row = QHBoxLayout()
         out_row.setContentsMargins(0, 6, 0, 0)
         out_row.setSpacing(8)
-        out_row.addWidget(FlameLabel("Output:"))
+        out_row.addWidget(FlameLabel("Output Folder:"))
 
-        self.btn_output_default = FlameToggleButton("Default")
+        self.btn_output_default = FlameToggleButton("Default", padding_h=10)
         self.btn_output_default.setToolTip(
             "<p>Each file's outputs go to <b>sofa_mastered/</b> and <b>DFHRTF/</b> subfolders "
             "inside its own source folder. Global averaging produces a per-folder average.</p>"
         )
         self.btn_output_default.setChecked(True)
-        self.btn_output_custom = FlameToggleButton("Custom:")
+        self.btn_output_custom = FlameToggleButton("Custom:", padding_h=10)
         self.btn_output_custom.setToolTip(
             "<p>All outputs go under the chosen folder (with <b>sofa_mastered/</b> and <b>DFHRTF/</b> subfolders). "
             "Global averaging produces a single average across all files.</p>"
@@ -183,6 +214,22 @@ class FilesTab(QWidget):
         self._itd_cache.clear()
         self._radius_cache.clear()
 
+    def _remove_selected(self):
+        for item in self.file_list.selectedItems():
+            path = item.text()
+            self._itd_cache.pop(path, None)
+            self._radius_cache.pop(path, None)
+            self.file_list.takeItem(self.file_list.row(item))
+
+    def _show_file_context_menu(self, pos):
+        item = self.file_list.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        act_remove = menu.addAction("Remove")
+        if menu.exec(self.file_list.mapToGlobal(pos)) is act_remove:
+            self._remove_selected()
+
     def _on_file_selection_changed(self):
         selected = self.file_list.selectedItems()
         if not selected:
@@ -195,6 +242,8 @@ class FilesTab(QWidget):
             self.lbl_radius_val.setText("-")
             self.btn_calc_radius.hide()
             self.lbl_radius_val.show()
+            self.btn_view_grid.setEnabled(False)
+            self.btn_remove_selected.setEnabled(False)
             return
 
         file_path = selected[0].text()
@@ -226,6 +275,9 @@ class FilesTab(QWidget):
                 self.btn_calc_radius.setText("Calculate")
                 self.btn_calc_radius.setEnabled(True)
                 self.btn_calc_radius.show()
+
+            self.btn_view_grid.setEnabled(True)
+            self.btn_remove_selected.setEnabled(True)
         else:
             self.lbl_samplerate.setText("Samplerate: ERROR")
             self.lbl_length.setText("Length: -")
@@ -236,6 +288,8 @@ class FilesTab(QWidget):
             self.lbl_radius_val.setText("-")
             self.btn_calc_radius.hide()
             self.lbl_radius_val.show()
+            self.btn_view_grid.setEnabled(False)
+            self.btn_remove_selected.setEnabled(True)  # file exists even if metadata fails
 
     def _on_calc_itd_clicked(self):
         selected = self.file_list.selectedItems()
@@ -269,6 +323,41 @@ class FilesTab(QWidget):
         self.btn_calc_radius.hide()
         self.lbl_radius_val.show()
 
+    def _on_view_grid_clicked(self):
+        selected = self.file_list.selectedItems()
+        if not selected:
+            return
+
+        file_path = selected[0].text()
+        grid = get_grid_cartesian(file_path)
+        if grid is None:
+            return
+
+        import os
+        import matplotlib
+        matplotlib.use('QtAgg')
+        import matplotlib.pyplot as plt
+
+        cart = grid['cart']
+        radius = grid['radius']
+        n_nodes = grid['n_nodes']
+
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+
+        fig = plt.figure(figsize=(8, 8))
+        try:
+            fig.canvas.manager.set_window_title(stem)
+        except Exception:
+            pass  # headless or backend without window manager
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(cart[:, 0], cart[:, 1], cart[:, 2], c='black', s=4)
+        ax.set_title(f"{radius:g} m radius, {n_nodes} nodes")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        ax.set_box_aspect([1, 1, 1])
+        plt.show(block=False)
+
     def _open_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Select SOFA files", "", "SOFA Files (*.sofa *.SOFA)")
         if files:
@@ -290,6 +379,21 @@ class FilesTab(QWidget):
             'default': self.btn_output_default.get_value(),
             'folder': self.edit_output_folder.text().strip()
         }
+
+    def set_output_config(self, cfg: dict) -> None:
+        """Restore the output-folder row from a saved config dict."""
+        use_default = bool(cfg.get('default', True))
+        folder = cfg.get('folder', '')
+
+        # Drive through the toggle handlers to keep visual state consistent
+        if use_default:
+            self._set_toggle(self.btn_output_default, True)
+            self._set_toggle(self.btn_output_custom, False)
+        else:
+            self._set_toggle(self.btn_output_default, False)
+            self._set_toggle(self.btn_output_custom, True)
+        self.edit_output_folder.setText(folder)
+        self._sync_output_enabled()
 
 # --- SOFA Tab Widget
 class SofaTab(QWidget):
@@ -366,7 +470,7 @@ class SofaTab(QWidget):
 
         self.lbl_naming = FlameLabel("SOFA Naming:")
         self.edit_naming = FlameLineEdit("{filename}_{samplerate}_{eq}")
-        self.edit_naming.setToolTip("<p>Naming of output SOFA files. Can include static text and the following variables: {filename} (original SOFA filename); {samplerate} (samplerate of processed SOFA file); {eq} (uneq or dfeq)</p>")
+        self.edit_naming.setToolTip("<p>Naming of output SOFA files. Can include static text and the following variables: {filename} (original SOFA filename); {folder} (source file's parent folder name); {samplerate} (samplerate of processed SOFA file); {eq} (uneq or dfeq)</p>")
 
         # --- Apply configurations from above
         grid.addWidget(FlameLabel("Samplerates:"), 0, 0)
@@ -414,6 +518,32 @@ class SofaTab(QWidget):
             'naming': self.edit_naming.text()
         }
 
+    def set_config(self, cfg: dict) -> None:
+        """Restore all SOFA tab widgets from a saved config dict (surfaced keys only)."""
+        srs = cfg.get('samplerates', [48000])
+        self.btn_sr_44k.set_value(44100 in srs)
+        self.btn_sr_48k.set_value(48000 in srs)
+        self.btn_sr_96k.set_value(96000 in srs)
+
+        self.btn_lf.set_value(bool(cfg.get('lf_extension', False)))
+        self.slider_xover.set_value(cfg.get('xover', 375.0))
+        self.btn_uneq.set_value(bool(cfg.get('uneq', False)))
+        self.btn_dfeq.set_value(bool(cfg.get('dfeq', True)))
+        self.btn_dist.set_value(bool(cfg.get('normalize_distance', True)))
+        self.slider_dist.set_value(cfg.get('distance_m', 1.2))
+        self.slider_length.set_value(cfg.get('hrir_length', 512))
+        self.edit_naming.setText(cfg.get('naming', '{filename}_{samplerate}_{eq}'))
+
+        # Sync slider enable states
+        self.slider_xover.setEnabled(bool(cfg.get('lf_extension', False)))
+        self.slider_dist.setEnabled(bool(cfg.get('normalize_distance', True)))
+
+        # Enable/disable the whole container (fires sofa_toggled signal)
+        enabled = bool(cfg.get('enabled', False))
+        self.btn_enable.set_value(enabled)
+        self.container.setEnabled(enabled)
+        self.sofa_toggled.emit(enabled)
+
 # --- DFHRTF Tab Widget
 class DfhrtfTab(QWidget):
     dfhrtf_toggled = Signal(bool)
@@ -424,8 +554,8 @@ class DfhrtfTab(QWidget):
         self.layout.setContentsMargins(0, 10, 0, 0)
         self.layout.setSpacing(0)
 
-        self.btn_enable = FlameToggleButton("HRTF Outputs")
-        self.btn_enable.setToolTip("<p>Enables HRTF outputs. At least one text output or one graph output must be selected. NOTE: If SOFA outputs are enabled, source SOFA for DFHRTF outpus the processed SOFA files; otherwise, source is imported SOFA files on Files tab.</p>")
+        self.btn_enable = FlameToggleButton("DHRTF Outputs")
+        self.btn_enable.setToolTip("<p>Enables DHRTF outputs. At least one text output or one graph output must be selected. NOTE: If SOFA outputs are enabled, source SOFA for DFHRTF outpus the processed SOFA files; otherwise, source is imported SOFA files on Files tab.</p>")
         self.btn_enable.toggled.connect(self._on_enable_toggled)
         self.layout.addWidget(self.btn_enable)
 
@@ -446,12 +576,16 @@ class DfhrtfTab(QWidget):
         self.btn_per_sofa_lr.setChecked(True)
         self.btn_per_sofa_avg = FlameToggleButton("Per SOFA Avg DFHRTFs")
         self.btn_per_sofa_avg.setToolTip("<p>Generates average of left ear + right ear DFHRTF magnitute response text files per source SOFA file.</p>")
+        self.dd_per_sofa_avg_algo = FlameDropdown("Avg Algo")
+        self.dd_per_sofa_avg_algo.setToolTip("<p>Averaging algorithm used for the per-SOFA L/R average. See README for details.</p>")
+        self.dd_per_sofa_avg_algo.addItems(["Arithmetic Mean", "Geo-Arc-Length", "Soft-DTW"])
 
         self.edit_text_filename = FlameLineEdit("text_{filename}_{LR}")
         self.edit_text_filename.setToolTip(
             "<p>Naming of generated text files. Supported variables:</p> "
             "<p style='margin-top: 0px; margin-left: 10px;'>"
             "&bull; {filename} source SOFA filename;<br>"
+            "&bull; {folder} source file's parent folder name;<br>"
             "&bull; {samplerate} source SOFA samplerate;<br>"
             "&bull; {LR} L/R/Avg.;<br>"
             "&bull; {algo} averaging algorithm (global average only).</p>"
@@ -470,13 +604,26 @@ class DfhrtfTab(QWidget):
         self.btn_stereo_graphs = FlameToggleButton("Stereo Graphs")
         self.btn_stereo_graphs.setToolTip("<p>Enables +30/-30 (stereo) graphs outputs. Left ear's left channel HRTF and right ear's right channel HRTF overlayed on one graph.</p>")
 
+        self.btn_weighted_grid = FlameToggleButton("Weighted Grid")
+        self.btn_weighted_grid.setToolTip(
+            "<p>Plots the solid-angle-weighted measurement grid used in the DFHRTF calculation. "
+            "Shows the cleaned point set with markers sized and colored by weight.</p>"
+        )
+        self.dd_weighted_scope = FlameDropdown("Scope")
+        self.dd_weighted_scope.setToolTip(
+            "<p><b>Per Folder</b>: one representative grid plot per source folder.<br>"
+            "<b>All Files</b>: one grid plot per SOFA file.</p>"
+        )
+        self.dd_weighted_scope.addItems(["Per Folder", "All Files"])
+
         self.edit_graph_filename = FlameLineEdit("graph_{filename}_{graphtype}")
         self.edit_graph_filename.setToolTip(
             "<p>Naming of generated graph files. Supported variables:</p> "
             "<p style='margin-top: 0px; margin-left: 10px;'>"
             "&bull; {filename} source SOFA filename;<br>"
+            "&bull; {folder} source file's parent folder name;<br>"
             "&bull; {samplerate} source SOFA samplerate;<br>"
-            "&bull; {graphtype} df / stereo.</p>"
+            "&bull; {graphtype} df / stereo / weighted.</p>"
         )
         self.dd_graph_ext = FlameDropdown("Extension")
         self.dd_graph_ext.setToolTip("<p>Graph file extension.</p>")
@@ -504,7 +651,7 @@ class DfhrtfTab(QWidget):
         self.btn_exclude_outliers.setChecked(True)
 
         # --- Connections for Dependency State ---
-        for toggle in [self.btn_per_sofa_lr, self.btn_per_sofa_avg, self.btn_dfhrtf_graphs, self.btn_stereo_graphs, self.btn_extend_lf, self.btn_avg_all]:
+        for toggle in [self.btn_per_sofa_lr, self.btn_per_sofa_avg, self.btn_dfhrtf_graphs, self.btn_stereo_graphs, self.btn_weighted_grid, self.btn_extend_lf, self.btn_avg_all]:
             toggle.toggled.connect(self._update_dependencies)
 
         # --- Layout Mapping ---
@@ -512,6 +659,7 @@ class DfhrtfTab(QWidget):
         row0 = QHBoxLayout()
         row0.addWidget(self.btn_per_sofa_lr)
         row0.addWidget(self.btn_per_sofa_avg)
+        row0.addWidget(self.dd_per_sofa_avg_algo)
         grid.addLayout(row0, 0, 1)
 
         row1 = QHBoxLayout()
@@ -524,6 +672,8 @@ class DfhrtfTab(QWidget):
         row2 = QHBoxLayout()
         row2.addWidget(self.btn_dfhrtf_graphs)
         row2.addWidget(self.btn_stereo_graphs)
+        row2.addWidget(self.btn_weighted_grid)
+        row2.addWidget(self.dd_weighted_scope)
         grid.addLayout(row2, 2, 1)
 
         row3 = QHBoxLayout()
@@ -561,7 +711,8 @@ class DfhrtfTab(QWidget):
 
     def _update_dependencies(self):
         any_text = self.btn_per_sofa_lr.isChecked() or self.btn_per_sofa_avg.isChecked()
-        any_graph = self.btn_dfhrtf_graphs.isChecked() or self.btn_stereo_graphs.isChecked()
+        any_graph = (self.btn_dfhrtf_graphs.isChecked() or self.btn_stereo_graphs.isChecked()
+                     or self.btn_weighted_grid.isChecked())
         any_output = any_text or any_graph
 
         # Text Output Config
@@ -572,6 +723,7 @@ class DfhrtfTab(QWidget):
         # Graph Output Config
         self.edit_graph_filename.setEnabled(any_graph)
         self.dd_graph_ext.setEnabled(any_graph)
+        self.dd_weighted_scope.setEnabled(self.btn_weighted_grid.isChecked())
 
         # Refinement & Post Processing
         self.slider_smoothing.setEnabled(any_output)
@@ -579,6 +731,7 @@ class DfhrtfTab(QWidget):
         self.btn_extend_lf.setEnabled(any_output)
         self.slider_xover.setEnabled(any_output and self.btn_extend_lf.isChecked())
 
+        self.dd_per_sofa_avg_algo.setEnabled(self.btn_per_sofa_avg.isChecked())
         self.btn_avg_all.setEnabled(any_output and self.btn_per_sofa_lr.isChecked())
         self.dd_algo.setEnabled(any_output and self.btn_per_sofa_lr.isChecked() and self.btn_avg_all.isChecked())
         self.btn_exclude_outliers.setEnabled(any_output and self.btn_per_sofa_lr.isChecked() and self.btn_avg_all.isChecked())
@@ -588,11 +741,14 @@ class DfhrtfTab(QWidget):
             'enabled': self.btn_enable.get_value(),
             'per_sofa_lr': self.btn_per_sofa_lr.get_value(),
             'per_sofa_avg': self.btn_per_sofa_avg.get_value(),
+            'per_sofa_avg_algo': self.dd_per_sofa_avg_algo.get_value(),
             'text_filename': self.edit_text_filename.text(),
             'text_delimiter': self.dd_delimiter.get_value(),
             'text_extension': self.dd_text_ext.get_value(),
             'dfhrtf_graphs': self.btn_dfhrtf_graphs.get_value(),
             'stereo_graphs': self.btn_stereo_graphs.get_value(),
+            'weighted_grid': self.btn_weighted_grid.get_value(),
+            'weighted_grid_scope': self.dd_weighted_scope.get_value(),
             'graph_filename': self.edit_graph_filename.text(),
             'graph_extension': self.dd_graph_ext.get_value(),
             'smoothing': int(self.slider_smoothing.get_value()),
@@ -603,3 +759,37 @@ class DfhrtfTab(QWidget):
             'algo': self.dd_algo.get_value(),
             'exclude_outliers': self.btn_exclude_outliers.get_value()
         }
+
+    def set_config(self, cfg: dict) -> None:
+        """Restore all DFHRTF tab widgets from a saved config dict (surfaced keys only)."""
+        self.btn_per_sofa_lr.set_value(bool(cfg.get('per_sofa_lr', True)))
+        self.btn_per_sofa_avg.set_value(bool(cfg.get('per_sofa_avg', False)))
+        self.dd_per_sofa_avg_algo.set_value(cfg.get('per_sofa_avg_algo', 'Arithmetic Mean'))
+        self.edit_text_filename.setText(cfg.get('text_filename', 'text_{filename}_{LR}'))
+        self.dd_delimiter.set_value(cfg.get('text_delimiter', 'Tab'))
+        self.dd_text_ext.set_value(cfg.get('text_extension', 'txt'))
+
+        self.btn_dfhrtf_graphs.set_value(bool(cfg.get('dfhrtf_graphs', True)))
+        self.btn_stereo_graphs.set_value(bool(cfg.get('stereo_graphs', False)))
+        self.btn_weighted_grid.set_value(bool(cfg.get('weighted_grid', False)))
+        self.dd_weighted_scope.set_value(cfg.get('weighted_grid_scope', 'Per Folder'))
+        self.edit_graph_filename.setText(cfg.get('graph_filename', 'graph_{filename}_{graphtype}'))
+        self.dd_graph_ext.set_value(cfg.get('graph_extension', 'png'))
+
+        self.slider_smoothing.set_value(cfg.get('smoothing', 24))
+        self.slider_tilt.set_value(cfg.get('tilt', 0.0))
+        self.btn_extend_lf.set_value(bool(cfg.get('extend_lf', False)))
+        self.slider_xover.set_value(cfg.get('xover', 375.0))
+
+        self.btn_avg_all.set_value(bool(cfg.get('avg_all', False)))
+        self.dd_algo.set_value(cfg.get('algo', 'Arithmetic Mean'))
+        self.btn_exclude_outliers.set_value(bool(cfg.get('exclude_outliers', True)))
+
+        # Re-run gating once after bulk restore so enabled/disabled state is correct
+        self._update_dependencies()
+
+        # Enable/disable the whole container (fires dfhrtf_toggled signal)
+        enabled = bool(cfg.get('enabled', False))
+        self.btn_enable.set_value(enabled)
+        self.container.setEnabled(enabled)
+        self.dfhrtf_toggled.emit(enabled)

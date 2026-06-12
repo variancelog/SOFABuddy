@@ -4,63 +4,92 @@ import subprocess
 import glob
 import numpy as np
 
+# Shared folder-name constants (single definition; avoids silent drift between files)
+SOFA_MASTERED_DIR = "sofa_mastered"
+DFHRTF_OUTPUT_DIR = "DFHRTF"
+
 # In-project imports (Deferred inside functions to speed up startup)
 
-def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter, log_callback, stop_checker=None):
-    """Orchestrates the full ingestion -> interpolation -> outlier -> averaging chain."""
+def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter,
+                  log_callback, stop_checker=None, avg_params=None):
+    """
+    Orchestrates the full ingestion -> interpolation -> outlier -> averaging chain.
+
+    avg_params is an optional dict drawn from config['averaging'] and may contain:
+      num_points, outlier_threshold_std, outlier_gamma,
+      softdtw_gamma, geo_arc_y_scale
+    All keys fall back to the values used historically if absent.
+    """
     from core.averaging import DataIngestor, CommonAxisInterpolator, OutlierDetector, CurveAverager
 
     if not file_list:
         return
-    
+
+    # Unpack averaging params with the historically-correct runtime defaults
+    p = avg_params or {}
+    num_points       = int(p.get('num_points', 512))
+    threshold_std    = float(p.get('outlier_threshold_std', 1.0))
+    outlier_gamma    = float(p.get('outlier_gamma', 1.0))
+    softdtw_gamma    = float(p.get('softdtw_gamma', 0.01))
+    softdtw_max_iter = int(p.get('softdtw_max_iter', 25))
+    softdtw_tol      = float(p.get('softdtw_tol', 0.001))
+    geo_arc_y_scale  = float(p.get('geo_arc_y_scale', 0.01))
+
     try:
         log_callback(f"Averaging {len(file_list)} files using {algo_name}...")
-        
+
         # 1. Ingest
         dfs = []
         for f in file_list:
             if stop_checker and stop_checker(): return
             dfs.append(DataIngestor.load_csv(f))
-            
+
         # 2. Interpolate to common axis
         if stop_checker and stop_checker(): return
-        interp_data = CommonAxisInterpolator.interpolate_to_common_axis(dfs, num_points=512)
+        interp_data = CommonAxisInterpolator.interpolate_to_common_axis(dfs, num_points=num_points)
         common_freqs = interp_data['common_freqs']
-        norm_freqs = interp_data['norm_freqs']
+        norm_freqs   = interp_data['norm_freqs']
         norm_mags_2d = interp_data['norm_mags_2d']
-        mag_min = interp_data['mag_min']
-        mag_max = interp_data['mag_max']
-        
+        mag_min      = interp_data['mag_min']
+        mag_max      = interp_data['mag_max']
+
         # 3. Outlier Detection
         final_mags_2d = norm_mags_2d
         if exclude_outliers:
             if stop_checker and stop_checker(): return
-            valid_indices, excluded = OutlierDetector.filter_outliers(norm_mags_2d, algo_name, threshold_std=1.0)
+            valid_indices, excluded = OutlierDetector.filter_outliers(
+                norm_mags_2d, algo_name,
+                threshold_std=threshold_std,
+                gamma=outlier_gamma
+            )
             if excluded:
                 log_callback(f" -> Excluded {len(excluded)} outliers.")
             final_mags_2d = norm_mags_2d[valid_indices]
-            
+
         # 4. Average
         if stop_checker and stop_checker(): return
         if algo_name == "Arithmetic Mean":
             avg_norm = CurveAverager.arithmetic_mean(final_mags_2d)
         elif algo_name == "Geo-Arc-Length":
-            # Pre-scale data to simulate a y-weight of 0.01 in the distance calculation
-            scaled_mags = final_mags_2d * 0.01
-            scaled_avg = CurveAverager.geometric_arc_length_blend(norm_freqs, scaled_mags)
-            avg_norm = scaled_avg / 0.01
+            # Pre-scale data to weight the y-axis in the arc-length distance calculation
+            scaled_mags = final_mags_2d * geo_arc_y_scale
+            scaled_avg  = CurveAverager.geometric_arc_length_blend(norm_freqs, scaled_mags)
+            avg_norm    = scaled_avg / geo_arc_y_scale
         elif algo_name == "Soft-DTW":
             log_callback(" -> Running Soft-DTW Barycenter (this may take a moment)...")
-            # Note: tslearn SoftDTW doesn't natively support a simple stop callback mid-math easily here,
-            # but we check between ears.
-            avg_norm = CurveAverager.soft_dtw_barycenter(final_mags_2d, gamma=0.01)
+            avg_norm = CurveAverager.soft_dtw_barycenter(
+                final_mags_2d,
+                gamma=softdtw_gamma,
+                max_iter=softdtw_max_iter,
+                tol=softdtw_tol
+            )
         else:
             avg_norm = CurveAverager.arithmetic_mean(final_mags_2d)
-            
+
         # 5. Unnormalize
         if stop_checker and stop_checker(): return
         avg_db = CommonAxisInterpolator.unnormalize_magnitude(avg_norm, mag_min, mag_max)
-        
+
         # 6. Save
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         is_csv = output_path.lower().endswith(".csv")
@@ -69,9 +98,9 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
                 ffile.write(f"Frequency (Hz){delimiter}Magnitude (dB)\n")
             for f, m in zip(common_freqs, avg_db):
                 ffile.write(f"{f:.6f}{delimiter}{m:.3f}\n")
-                
+
         log_callback(f" [+] Saved Global Average: {os.path.basename(output_path)}")
-        
+
     except Exception as e:
         log_callback(f" [!] Averaging Error: {str(e)}")
 
@@ -117,7 +146,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
 
                 # Mastered SOFAs live where sofa_processor wrote them
                 base_dir = src_dir if use_default else custom_dir
-                mastered_dir = os.path.join(base_dir, "sofa_mastered")
+                mastered_dir = os.path.join(base_dir, SOFA_MASTERED_DIR)
 
                 if not os.path.exists(mastered_dir):
                     log_callback(f" [!] Warning: Mastered dir not found for {base_name}. Using raw file.")
@@ -150,6 +179,9 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         # groups[output_root] = {'l': [...], 'r': [...]}
         groups = {}
 
+        # Track which output dirs have already received a weighted-grid plot (Per Folder scope)
+        seen_grid_dirs = set()
+
         # 3. Execution
         total_inputs = len(resolved_inputs)
         for i, (input_path, base_name, sr_label, src_dir) in enumerate(resolved_inputs):
@@ -160,8 +192,13 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
 
             # Per-file DFHRTF output root
             base_dir = src_dir if use_default else custom_dir
-            output_root = os.path.join(base_dir, "DFHRTF")
+            output_root = os.path.join(base_dir, DFHRTF_OUTPUT_DIR)
             os.makedirs(output_root, exist_ok=True)
+
+            folder_name = os.path.basename(src_dir)
+
+            # Pull advanced dfhrtf params (with historically-correct defaults)
+            dfhrtf_adv = df_cfg.get('advanced', {})
 
             cmd = [sys.executable, "-u", script_dfhrtf, "--input", input_path]
             cmd.extend(["--smoothing", str(df_cfg.get('smoothing', 48))])
@@ -170,14 +207,23 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 cmd.append("--lf_ext_dfhrtf")
                 cmd.extend(["--lf_ext_dfhrtf_xover", str(df_cfg.get('xover', 375.0))])
 
+            # Advanced params forwarded to the subprocess
+            cmd.extend(["--n-fft",                str(int(dfhrtf_adv.get('n_fft', 16384)))])
+            cmd.extend(["--output-octave-fraction", str(int(dfhrtf_adv.get('output_octave_fraction', 48)))])
+            cmd.extend(["--norm-freq-hz",          str(float(dfhrtf_adv.get('norm_freq_hz', 1000.0)))])
+            cmd.extend(["--lf-blend-low-oct",      str(float(dfhrtf_adv.get('lf_blend_low_oct', 0.50)))])
+            cmd.extend(["--lf-blend-high-oct",     str(float(dfhrtf_adv.get('lf_blend_high_oct', 1.0)))])
+            cmd.extend(["--stereo-angle",           str(float(dfhrtf_adv.get('stereo_angle_deg', 30.0)))])
+
             cmd.extend(["--delimiter", delim])
 
             # Text Outputs
             ext = f".{df_cfg.get('text_extension', 'txt')}"
             template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
 
-            def get_text_path(lr_val, _base=base_name, _sr=sr_label, _ext=ext, _root=output_root, _tmpl=template):
+            def get_text_path(lr_val, _base=base_name, _sr=sr_label, _ext=ext, _root=output_root, _tmpl=template, _folder=folder_name):
                 fname = _tmpl.replace("{filename}", _base)
+                fname = fname.replace("{folder}", _folder)
                 fname = fname.replace("{samplerate}", _sr)
                 fname = fname.replace("{LR}", lr_val)
                 # Remove {algo} and any preceding/succeeding underscores for per-sofa
@@ -195,13 +241,14 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
 
             if df_cfg.get('per_sofa_avg'):
                 cmd.extend(["--text-out-avg", get_text_path("Avg")])
+                cmd.extend(["--avg-algo", df_cfg.get('per_sofa_avg_algo', 'Arithmetic Mean')])
 
             # Graph Outputs
             if df_cfg.get('dfhrtf_graphs'):
                 graph_template = df_cfg.get('graph_filename', "{filename}")
                 graph_ext = f".{df_cfg.get('graph_extension', 'png')}"
 
-                gname = graph_template.replace("{filename}", base_name).replace("{graphtype}", "df")
+                gname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{graphtype}", "df")
                 if not gname.endswith(graph_ext): gname += graph_ext
                 cmd.extend(["--graph-out", os.path.join(output_root, gname)])
 
@@ -209,7 +256,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 graph_template = df_cfg.get('graph_filename', "{filename}")
                 graph_ext = f".{df_cfg.get('graph_extension', 'png')}"
 
-                sname = graph_template.replace("{filename}", base_name).replace("{graphtype}", "stereo")
+                sname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{graphtype}", "stereo")
 
                 # Fallback: If {graphtype} wasn't used in the template, append '_stereo' manually
                 # so stereo graphs don't overwrite DF graphs.
@@ -222,6 +269,27 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                     if not sname.endswith(graph_ext): sname += graph_ext
 
                 cmd.extend(["--graph-stereo-out", os.path.join(output_root, sname)])
+
+            if df_cfg.get('weighted_grid'):
+                graph_template = df_cfg.get('graph_filename', "{filename}")
+                graph_ext = f".{df_cfg.get('graph_extension', 'png')}"
+                scope = df_cfg.get('weighted_grid_scope', 'Per Folder')
+
+                emit_weighted = (scope == 'All Files') or (output_root not in seen_grid_dirs)
+                if emit_weighted:
+                    seen_grid_dirs.add(output_root)
+                    wname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{graphtype}", "weighted")
+
+                    # Fallback: if {graphtype} wasn't used in the template, append '_weighted'
+                    if "{graphtype}" not in graph_template:
+                        if wname.endswith(graph_ext):
+                            wname = wname[:-len(graph_ext)] + "_weighted" + graph_ext
+                        else:
+                            wname += "_weighted" + graph_ext
+                    else:
+                        if not wname.endswith(graph_ext): wname += graph_ext
+
+                    cmd.extend(["--graph-weighted-out", os.path.join(output_root, wname)])
 
             # Run Subprocess
             creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
@@ -248,6 +316,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             ext = f".{df_cfg.get('text_extension', 'txt')}"
             short_algo = {"Arithmetic Mean": "arithmean", "Geo-Arc-Length": "geoarc", "Soft-DTW": "softdtw"}.get(algo, "softdtw")
             avg_template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
+            avg_params = config.get('averaging', {})
 
             for out_dir, grp in groups.items():
                 if not grp['l']:
@@ -260,15 +329,18 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
 
                 def get_avg_path(lr_val, _dir=out_dir, _tmpl=avg_template, _ext=ext, _algo=short_algo):
                     fname = _tmpl.replace("{filename}", "dfhrtfs_avg")
+                    fname = fname.replace("{folder}", os.path.basename(_dir))
                     fname = fname.replace("{samplerate}", "all")
                     fname = fname.replace("{LR}", lr_val)
                     fname = fname.replace("{algo}", _algo)
                     if not fname.endswith(_ext): fname += _ext
                     return os.path.join(_dir, fname)
 
-                run_averaging(grp['l'], algo, exclude, get_avg_path("L"), delim, log_callback, stop_checker)
+                run_averaging(grp['l'], algo, exclude, get_avg_path("L"), delim,
+                              log_callback, stop_checker, avg_params=avg_params)
                 if stop_checker and stop_checker(): return False
-                run_averaging(grp['r'], algo, exclude, get_avg_path("R"), delim, log_callback, stop_checker)
+                run_averaging(grp['r'], algo, exclude, get_avg_path("R"), delim,
+                              log_callback, stop_checker, avg_params=avg_params)
 
         return True
 

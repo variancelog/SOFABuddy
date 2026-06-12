@@ -51,6 +51,43 @@ def calculate_grid_radius(file_path: str) -> float:
         print(f"Error calculating grid radius for {file_path}: {e}")
         return 0.0
 
+def get_grid_cartesian(file_path: str) -> dict | None:
+    """
+    Reads SourcePosition from a SOFA file and returns the full measurement
+    grid projected onto the unit sphere as cartesian coordinates.
+
+    Returns a dict with:
+        'cart'   : np.ndarray (M, 3) — xyz coordinates on the unit sphere
+        'radius' : float — dominant measurement radius (metres)
+        'n_nodes': int   — number of measurement points
+    Returns None on failure.
+    """
+    try:
+        with nc.Dataset(file_path, 'r') as ds:
+            src_var = ds.variables.get('SourcePosition')
+            if src_var is None:
+                return None
+            src = src_var[:]                     # (M, 3) -> [az, el, radius]
+            n_nodes = src.shape[0]
+
+            # Dominant radius
+            radii = np.round(src[:, 2], decimals=3)
+            vals, counts = np.unique(radii, return_counts=True)
+            dominant_r = float(vals[np.argmax(counts)])
+
+            # Project to unit sphere (az/el in degrees)
+            az_rad = np.radians(src[:, 0])
+            el_rad = np.radians(src[:, 1])
+            x = np.cos(el_rad) * np.cos(az_rad)
+            y = np.cos(el_rad) * np.sin(az_rad)
+            z = np.sin(el_rad)
+            cart = np.column_stack((x, y, z))
+
+            return {'cart': cart, 'radius': dominant_r, 'n_nodes': n_nodes}
+    except Exception as e:
+        print(f"Error loading grid for {file_path}: {e}")
+        return None
+
 def calculate_max_itd(file_path: str) -> float:
     """
     Calculates the maximum ITD (in ms) by finding peak impulse indices across all measurements.

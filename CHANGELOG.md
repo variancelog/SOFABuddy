@@ -1,3 +1,23 @@
+## Unreleased
+
+### In progress
+- Evaluation-grid (eval-grid) backend for DFHRTF analysis.
+
+## 2026-06-11
+
+### Added
+- Configuration persistence (`core/config.py`, `core/default_settings.json`): cascaded defaults ⊕ per-user `user_settings.json` with schema validation (type coercion, range clamping, choice/list sanitizing), atomic save on app close and on Start Processing, and a "Reset Settings" button. The imported files list is never persisted; advanced tunables (`sofa.advanced.*`, `dfhrtf.advanced.*`, `averaging.*`) are JSON-only.
+- App-level Output Folder control on the Files tab: Default (per-source-folder outputs + per-folder averages) vs Custom (single shared root + one global average).
+- Grid Radius readout with on-demand Calculate, and a "View Grid" button that renders the measurement grid as a 3D scatter plot (window titled with the source filename).
+- DFHRTF weighted-grid graph output with Per-Folder / All-Files scope, and Per-SOFA Avg DFHRTF text output with a selectable averaging algorithm.
+- `{folder}` filename-template variable (source file's parent folder name), usable in SOFA naming and DFHRTF text/graph filename templates; resolves per file so multi-folder batches name correctly.
+- "Remove Selected" action on the Files tab: a 2×2 button grid (`[Add Files][Add Folder]` / `[Remove Selected][Clear All]`) plus a right-click "Remove" context menu.
+- `tests/test_config.py` covering config load, merge, validate, and persistence.
+
+### Changed
+- Renamed the Files-tab "Clear List" button to "Clear All".
+- `core/sofa_utils.py` gained `calculate_grid_radius()` and `get_grid_cartesian()` for the Grid Radius readout and grid visualization.
+
 ## 2026-06-04
 
 ### Added
