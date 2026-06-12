@@ -5,10 +5,11 @@ from PySide6.QtGui import QMouseEvent, QPainter, QColor
 from ui import theme as T
 
 class FlameToggleButton(QPushButton):
-    def __init__(self, label: str, parent=None):
+    def __init__(self, label: str, padding_h: int = 0, parent=None):
         super().__init__(parent)
         self.setCheckable(True)
         self._label = label
+        self._padding_h = padding_h
         self.update_style()
         self.toggled.connect(self.update_style)
 
@@ -17,6 +18,7 @@ class FlameToggleButton(QPushButton):
         bg     = T.ACCENT       if checked else T.BG_CONTROL
         border = T.ACCENT_LIGHT if checked else T.BORDER_UNSEL
         dis_bg = T.DISABLED_SEL_BG if checked else T.DISABLED_UNSEL_BG
+        padding = f"padding-left: {self._padding_h}px; padding-right: {self._padding_h}px;" if self._padding_h else ""
         self.setText(self._label)
         self.setStyleSheet(f"""
             QPushButton {{
@@ -26,6 +28,7 @@ class FlameToggleButton(QPushButton):
                 border-style: inset;
                 min-height: {T.CONTROL_HEIGHT}px;
                 max-height: {T.CONTROL_HEIGHT}px;
+                {padding}
             }}
             QPushButton:disabled {{
                 color: {T.FG_DISABLED};
@@ -34,11 +37,19 @@ class FlameToggleButton(QPushButton):
                 border-style: inset;
                 min-height: {T.CONTROL_HEIGHT}px;
                 max-height: {T.CONTROL_HEIGHT}px;
+                {padding}
             }}
         """)
 
     def get_value(self) -> bool:
         return self.isChecked()
+
+    def set_value(self, value: bool) -> None:
+        """Set the toggle state without firing dependent signals."""
+        self.blockSignals(True)
+        self.setChecked(bool(value))
+        self.update_style()
+        self.blockSignals(False)
 
 class FlameDropdown(QComboBox):
     def __init__(self, label: str = None, parent=None):
@@ -81,6 +92,19 @@ class FlameDropdown(QComboBox):
 
     def get_value(self):
         return self.currentData() if self.currentData() is not None else self.currentText()
+
+    def set_value(self, value) -> None:
+        """Select the item matching *value* (by data first, then text). Falls back to index 0."""
+        # Try matching by data
+        idx = self.findData(value)
+        if idx == -1:
+            # Try matching by text
+            idx = self.findText(str(value))
+        if idx == -1:
+            idx = 0
+        self.blockSignals(True)
+        self.setCurrentIndex(idx)
+        self.blockSignals(False)
 
 class FlameLabel(QLabel):
     def __init__(self, text: str = "", parent=None):
@@ -301,3 +325,11 @@ class FlameNumericSlider(QWidget):
         if isinstance(self.step, float):
             return float(self.value)
         return int(self.value)
+
+    def set_value(self, value) -> None:
+        """Programmatically set the slider value (clamped to step/allowed_values)."""
+        try:
+            self.value = self._clamp_to_step(float(value))
+        except (TypeError, ValueError):
+            self.value = self.default_val
+        self.update_display()

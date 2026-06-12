@@ -51,7 +51,8 @@ def calculate_geometric_weights(source_pos, advanced_dfeq=True):
     else:
         cart_coords = spherical_to_cartesian(1.0, az, el)
         final_idx = np.arange(len(source_pos))
-
+    ### Original Version - Problematic with open sphere grids like ARI 
+    """
     try:
         hull = ConvexHull(cart_coords)
         weights = np.zeros(len(source_pos))
@@ -68,6 +69,53 @@ def calculate_geometric_weights(source_pos, advanced_dfeq=True):
         weights = np.ones(len(source_pos)) / len(source_pos)
 
     return weights
+    """
+    
+    ### New Version - Accounts for open spheres with "ghost node" at south pole
+    
+    try:
+        # 1. Generate a dense, uniform grid of dummy points (Fibonacci sphere)
+        samples = 1000
+        indices = np.arange(0, samples, dtype=float) + 0.5
+        phi = np.arccos(1 - 2 * indices / samples)
+        theta = np.pi * (1 + 5**0.5) * indices
+        
+        gx = np.cos(theta) * np.sin(phi)
+        gy = np.sin(theta) * np.sin(phi)
+        gz = np.cos(phi)
+        ghost_coords = np.column_stack((gx, gy, gz))
+        
+        # 2. Keep only the ghost points that fall below the actual dataset's lowest point
+        # We subtract a tiny offset (0.01) so they don't exactly overlap the real edge
+        min_z = np.min(cart_coords[:, 2])
+        ghost_coords = ghost_coords[ghost_coords[:, 2] < (min_z - 0.01)]
+        
+        # 3. Combine real coordinates with the ghost coordinates
+        cart_coords_closed = np.vstack((cart_coords, ghost_coords))
+        
+        hull = ConvexHull(cart_coords_closed)
+        weights = np.zeros(len(source_pos))
+        temp_weights = np.zeros(len(cart_coords_closed))
+        
+        for simplex in hull.simplices:
+            A, B, C = cart_coords_closed[simplex]
+            cross_prod = np.cross(B - A, C - A)
+            area = 0.5 * np.linalg.norm(cross_prod)
+            temp_weights[simplex] += area / 3.0
+            
+        # 4. Strip off ALL the ghost node weights (keep only the original nodes)
+        real_weights = temp_weights[:len(cart_coords)]
+        
+        # 5. Assign back to the final indices and normalize
+        weights[final_idx] = real_weights
+        weights /= np.sum(weights)
+        # ---------------------------------
+    except Exception as e:
+        print(f"[Warning] Weight calculation fallback used: {e}")
+        weights = np.ones(len(source_pos)) / len(source_pos)
+
+    return weights
+    
 
 def find_closest_grid_point(source_pos, target_az, target_el):
     """Finds index of closest grid point using Cartesian Euclidean distance."""
@@ -135,23 +183,24 @@ def load_lf_reference(file_path):
         print(f"[ERROR] Loading LF reference '{file_path}': {e}")
         return None, None
 
-def apply_lf_extension(target_freqs, val_db, ref_freqs, ref_db, xover_freq):
-    """Applies LF extension with a Linkwitz-Riley type linear crossfade."""
+def apply_lf_extension(target_freqs, val_db, ref_freqs, ref_db, xover_freq,
+                       blend_low_oct=0.50, blend_high_oct=1.0):
+    """Applies LF extension with a cosine crossfade."""
     # Interpolate reference to match target frequencies
     interp_ref_db = np.interp(target_freqs, ref_freqs, ref_db)
-    
+
     # Level match at crossover
     xover_idx = (np.abs(target_freqs - xover_freq)).argmin()
     offset = val_db[xover_idx] - interp_ref_db[xover_idx]
     matched_ref_db = interp_ref_db + offset
-    
+
     # Convert to linear amplitude
     val_lin = 10**(val_db / 20.0)
     ref_lin = 10**(matched_ref_db / 20.0)
-    
-    # Crossfade weights (1.5 octave range)
-    f_low = xover_freq / (2**0.5)
-    f_high = xover_freq * (2**1.0)
+
+    # Crossfade weights (configurable octave widths)
+    f_low = xover_freq / (2**blend_low_oct)
+    f_high = xover_freq * (2**blend_high_oct)
     
     weights_ref = np.zeros_like(target_freqs)
     mask_low = target_freqs <= f_low
@@ -183,9 +232,10 @@ def main():
     parser.add_argument("--text-out-l", help="Explicit path for Left ear text output")
     parser.add_argument("--text-out-r", help="Explicit path for Right ear text output")
     parser.add_argument("--text-out-avg", help="Explicit path for Average text output")
+    parser.add_argument("--avg-algo", default="Arithmetic Mean", help="L/R averaging algorithm: 'Arithmetic Mean', 'Geo-Arc-Length', or 'Soft-DTW'")
     parser.add_argument("--graph-out", help="Explicit path for Graph plot output")
     parser.add_argument("--graph-stereo-out", help="Explicit path for Stereo graph plot output")
-    parser.add_argument("--graph-eval-out", help="Explicit path for Evaluation Grid plot output")
+    parser.add_argument("--graph-weighted-out", help="Explicit path for Weighted Grid plot output")
     parser.add_argument("--delimiter", default="\t", help="Delimiter for text outputs")
     
     # Refinement Parameters
@@ -193,6 +243,20 @@ def main():
     parser.add_argument("--tilt", type=float, default=0.0, help="Spectral Tilt (dB/oct)")
     parser.add_argument("--lf_ext_dfhrtf", action="store_true", help="Enable Low Frequency extension using reference file")
     parser.add_argument("--lf_ext_dfhrtf_xover", type=float, default=375.0, help="Crossover frequency for LF extension")
+
+    # Advanced tunable parameters (forwarded from dfhrtf.advanced config section)
+    parser.add_argument("--n-fft",                  type=int,   default=16384,
+                        help="FFT size for diffuse-field computation")
+    parser.add_argument("--output-octave-fraction",  type=int,   default=48,
+                        help="Resolution of output frequency grid (1/N octave)")
+    parser.add_argument("--norm-freq-hz",            type=float, default=1000.0,
+                        help="0 dB reference frequency for normalization (Hz)")
+    parser.add_argument("--lf-blend-low-oct",        type=float, default=0.50,
+                        help="Octaves below crossover for LF extension crossfade start")
+    parser.add_argument("--lf-blend-high-oct",       type=float, default=1.0,
+                        help="Octaves above crossover for LF extension crossfade end")
+    parser.add_argument("--stereo-angle",            type=float, default=30.0,
+                        help="Azimuth angle (degrees) for stereo graph L/R measurement")
     
     # Legacy/Misc
     parser.add_argument("--output_dir", help="Output folder (used if explicit paths not provided)")
@@ -213,57 +277,43 @@ def main():
     hrirs = sofa.Data_IR
     fs = float(sofa.Data_SamplingRate)
 
-    # 1.5 Evaluation Grid Plot (depends only on SourcePosition — run before FFT pipeline)
-    if args.graph_eval_out:
-        print("   -> Plotting Evaluation Grid...")
-        src = sofa.SourcePosition
-        n_nodes = src.shape[0]
-        radii = np.round(src[:, 2], decimals=3)
-        vals, counts = np.unique(radii, return_counts=True)
-        dom_r = vals[np.argmax(counts)]
-        cart = spherical_to_cartesian(1.0, src[:, 0], src[:, 1])
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        ax.scatter(cart[:, 0], cart[:, 1], cart[:, 2], c='black', s=4)
-        ax.set_title(f"{dom_r:g} m radius, {n_nodes} nodes")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")
-        ax.set_box_aspect([1, 1, 1])
-        plt.savefig(args.graph_eval_out, dpi=150)
-        print(f"   [+] Saved Eval Grid: {os.path.basename(args.graph_eval_out)}")
-        plt.close()
+    # Resolve advanced params from args
+    n_fft            = args.n_fft
+    norm_freq_hz     = args.norm_freq_hz
+    lf_blend_low_oct = args.lf_blend_low_oct
+    lf_blend_high_oct= args.lf_blend_high_oct
+    stereo_angle     = args.stereo_angle
 
     # 2. Compute Diffuse Field Response
     weights = calculate_geometric_weights(sofa.SourcePosition, advanced_dfeq=args.advanced_dfeq)
-    n_fft = 16384
-    
+
     # FFT (Measurements, Receivers, Freqs)
     fft_data = np.fft.rfft(hrirs, n=n_fft, axis=2)
     power_spec = np.abs(fft_data)**2
-    
+
     # Weighted Average across measurements (Axis 0)
     weights_expanded = weights[:, np.newaxis, np.newaxis]
     avg_power = np.sum(power_spec * weights_expanded, axis=0)
-    
+
     avg_mag = np.sqrt(avg_power)
     avg_db = 20 * np.log10(avg_mag + 1e-12)
     fft_freqs = np.fft.rfftfreq(n_fft, d=1/fs)
 
     # 3. Interpolate & Smooth
-    target_freqs = generate_fractional_octave_frequencies(20, 20000, fraction=48)
-    
+    target_freqs = generate_fractional_octave_frequencies(20, 20000,
+                                                          fraction=args.output_octave_fraction)
+
     print(f"   -> Applying 1/{args.smoothing} Octave Smoothing...")
     smoothed_l = apply_smoothing(fft_freqs, avg_db[0], fraction=args.smoothing)
     smoothed_r = apply_smoothing(fft_freqs, avg_db[1], fraction=args.smoothing)
-    
+
     val_l = np.interp(target_freqs, fft_freqs, smoothed_l)
     val_r = np.interp(target_freqs, fft_freqs, smoothed_r)
 
-    # 4. Normalize (0 dB at 1 kHz)
-    idx_1k = (np.abs(target_freqs - 1000.0)).argmin()
-    val_l -= val_l[idx_1k]
-    val_r -= val_r[idx_1k]
+    # 4. Normalize (0 dB at norm_freq_hz)
+    idx_norm = (np.abs(target_freqs - norm_freq_hz)).argmin()
+    val_l -= val_l[idx_norm]
+    val_r -= val_r[idx_norm]
 
     # 4.5 LF Extension
     if args.lf_ext_dfhrtf:
@@ -271,17 +321,43 @@ def main():
         ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "lf_ref_mag.txt")
         ref_freqs, ref_db = load_lf_reference(ref_path)
         if ref_freqs is not None:
-            val_l = apply_lf_extension(target_freqs, val_l, ref_freqs, ref_db, args.lf_ext_dfhrtf_xover)
-            val_r = apply_lf_extension(target_freqs, val_r, ref_freqs, ref_db, args.lf_ext_dfhrtf_xover)
+            val_l = apply_lf_extension(target_freqs, val_l, ref_freqs, ref_db,
+                                       args.lf_ext_dfhrtf_xover,
+                                       blend_low_oct=lf_blend_low_oct,
+                                       blend_high_oct=lf_blend_high_oct)
+            val_r = apply_lf_extension(target_freqs, val_r, ref_freqs, ref_db,
+                                       args.lf_ext_dfhrtf_xover,
+                                       blend_low_oct=lf_blend_low_oct,
+                                       blend_high_oct=lf_blend_high_oct)
 
     # 5. Apply Tilt
     if args.tilt != 0:
         print(f"   -> Applying {args.tilt} dB/oct tilt...")
-        val_l = apply_spectral_tilt(target_freqs, val_l, args.tilt, 1000.0)
-        val_r = apply_spectral_tilt(target_freqs, val_r, args.tilt, 1000.0)
+        val_l = apply_spectral_tilt(target_freqs, val_l, args.tilt, norm_freq_hz)
+        val_r = apply_spectral_tilt(target_freqs, val_r, args.tilt, norm_freq_hz)
 
     # 6. Calculate Average
-    val_avg = (val_l + val_r) / 2.0
+    if args.avg_algo == "Arithmetic Mean":
+        val_avg = (val_l + val_r) / 2.0
+    else:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+        from core.averaging import CurveAverager, CommonAxisInterpolator
+        mags_2d = np.vstack([val_l, val_r])
+        mag_min, mag_max = float(mags_2d.min()), float(mags_2d.max())
+        if mag_max > mag_min:
+            norm = (mags_2d - mag_min) / (mag_max - mag_min)
+        else:
+            norm = np.zeros_like(mags_2d)
+        if args.avg_algo == "Geo-Arc-Length":
+            log_f = np.log10(target_freqs)
+            norm_freqs = (log_f - log_f.min()) / (log_f.max() - log_f.min())
+            avg_norm = CurveAverager.geometric_arc_length_blend(norm_freqs, norm * 0.01) / 0.01
+        elif args.avg_algo == "Soft-DTW":
+            print("   -> Running Soft-DTW L/R average...")
+            avg_norm = CurveAverager.soft_dtw_barycenter(norm, gamma=0.01)
+        else:
+            avg_norm = CurveAverager.arithmetic_mean(norm)
+        val_avg = CommonAxisInterpolator.unnormalize_magnitude(avg_norm, mag_min, mag_max)
 
     # 7. Generate Plot
     if args.graph_out or args.only_plot or args.output_dir:
@@ -309,42 +385,50 @@ def main():
         
         plt.close()
 
-    # 7.5 Stereo Graph (+/- 30 degrees)
+    # 7.5 Stereo Graph (+/- stereo_angle degrees)
     if args.graph_stereo_out:
-        print("   -> Calculating +/-30 Stereo Response...")
-        # Find closest grid points: Left (+30), Right (330 or -30)
-        idx_30L = find_closest_grid_point(sofa.SourcePosition, 30.0, 0.0)
-        idx_30R = find_closest_grid_point(sofa.SourcePosition, 330.0, 0.0)
-        
+        az_left  = stereo_angle
+        az_right = 360.0 - stereo_angle  # e.g. 330° for 30°
+        print(f"   -> Calculating +/-{stereo_angle:.0f}° Stereo Response...")
+        # Find closest grid points: Left (+az), Right (-az / mirror)
+        idx_30L = find_closest_grid_point(sofa.SourcePosition, az_left, 0.0)
+        idx_30R = find_closest_grid_point(sofa.SourcePosition, az_right, 0.0)
+
         # Log what we found
         az_L, el_L = sofa.SourcePosition[idx_30L, 0], sofa.SourcePosition[idx_30L, 1]
         az_R, el_R = sofa.SourcePosition[idx_30R, 0], sofa.SourcePosition[idx_30R, 1]
-        print(f"      Closest to L(+30,0): az={az_L:.1f}, el={el_L:.1f}")
-        print(f"      Closest to R(-30,0): az={az_R:.1f}, el={el_R:.1f}")
-        
+        print(f"      Closest to L(+{az_left:.0f},0): az={az_L:.1f}, el={el_L:.1f}")
+        print(f"      Closest to R(-{stereo_angle:.0f},0): az={az_R:.1f}, el={el_R:.1f}")
+
         # Process L Ear
         mag_30L = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30L, 0, :], n=n_fft)) + 1e-12)
         smooth_30L = apply_smoothing(fft_freqs, mag_30L, fraction=args.smoothing)
         val_30L = np.interp(target_freqs, fft_freqs, smooth_30L)
-        val_30L -= val_30L[idx_1k]
-        
+        val_30L -= val_30L[idx_norm]
+
         # Process R Ear
         mag_30R = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30R, 1, :], n=n_fft)) + 1e-12)
         smooth_30R = apply_smoothing(fft_freqs, mag_30R, fraction=args.smoothing)
         val_30R = np.interp(target_freqs, fft_freqs, smooth_30R)
-        val_30R -= val_30R[idx_1k]
-        
+        val_30R -= val_30R[idx_norm]
+
         # Apply LF extension and tilt identically
         if args.lf_ext_dfhrtf:
             ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "lf_ref_mag.txt")
             ref_freqs, ref_db = load_lf_reference(ref_path)
             if ref_freqs is not None:
-                val_30L = apply_lf_extension(target_freqs, val_30L, ref_freqs, ref_db, args.lf_ext_dfhrtf_xover)
-                val_30R = apply_lf_extension(target_freqs, val_30R, ref_freqs, ref_db, args.lf_ext_dfhrtf_xover)
-        
+                val_30L = apply_lf_extension(target_freqs, val_30L, ref_freqs, ref_db,
+                                             args.lf_ext_dfhrtf_xover,
+                                             blend_low_oct=lf_blend_low_oct,
+                                             blend_high_oct=lf_blend_high_oct)
+                val_30R = apply_lf_extension(target_freqs, val_30R, ref_freqs, ref_db,
+                                             args.lf_ext_dfhrtf_xover,
+                                             blend_low_oct=lf_blend_low_oct,
+                                             blend_high_oct=lf_blend_high_oct)
+
         if args.tilt != 0:
-            val_30L = apply_spectral_tilt(target_freqs, val_30L, args.tilt, 1000.0)
-            val_30R = apply_spectral_tilt(target_freqs, val_30R, args.tilt, 1000.0)
+            val_30L = apply_spectral_tilt(target_freqs, val_30L, args.tilt, norm_freq_hz)
+            val_30R = apply_spectral_tilt(target_freqs, val_30R, args.tilt, norm_freq_hz)
             
         # Plot
         plt.figure(figsize=(10, 6))
@@ -362,6 +446,38 @@ def main():
         
         plt.savefig(args.graph_stereo_out, dpi=150)
         print(f"   [+] Saved Stereo Plot: {os.path.basename(args.graph_stereo_out)}")
+        plt.close()
+
+    # 7.6 Weighted Grid Plot (cleaned point set, markers sized/colored by solid-angle weight)
+    if args.graph_weighted_out:
+        print("   -> Plotting Weighted Grid...")
+        src = sofa.SourcePosition
+        cart = spherical_to_cartesian(1.0, src[:, 0], src[:, 1])
+
+        mask = weights > 0                      # surviving (cleaned) points only
+        w = weights[mask]
+        cart_clean = cart[mask]
+        sizes = 6 + (w / w.max()) * 80         # scale marker area 6..86 by weight
+
+        # Clip color range to 1st–99th percentile so the bulk of the distribution
+        # spans the full colormap instead of being crushed at the low end by pole outliers
+        vmin = np.percentile(w, 1)
+        vmax = np.percentile(w, 99)
+
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        sc = ax.scatter(
+            cart_clean[:, 0], cart_clean[:, 1], cart_clean[:, 2],
+            c=w, s=sizes, cmap='viridis', alpha=0.85, vmin=vmin, vmax=vmax
+        )
+        plt.colorbar(sc, ax=ax, label='Solid-angle weight', shrink=0.6, pad=0.1)
+        ax.set_title(f"Weighted grid — {int(mask.sum())} nodes")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        ax.set_box_aspect([1, 1, 1])
+        plt.savefig(args.graph_weighted_out, dpi=150, bbox_inches='tight')
+        print(f"   [+] Saved Weighted Grid: {os.path.basename(args.graph_weighted_out)}")
         plt.close()
 
     if args.only_plot: return

@@ -102,7 +102,7 @@ def calculate_geometric_weights(source_pos):
         print(" Failed (Fallback to uniform).")
         return np.ones(len(source_pos)) / len(source_pos)
 
-def find_global_onset(hrirs, threshold_ratio=0.05):
+def find_global_onset(hrirs, threshold_ratio):
     """Finds the absolute first sample where energy crosses the threshold."""
     global_max = np.max(np.abs(hrirs))
     threshold = global_max * threshold_ratio
@@ -132,10 +132,10 @@ def load_lf_target_base(filename, target_fs, n_fft):
         print(f"      [!] Error loading LF target: {e}")
         return None
 
-# Crossfade weights (1.5 octave range)
-def get_blend_weights(freqs, crossover_f):
-    f_low = crossover_f / (2**0.50)
-    f_high = crossover_f * (2**0.75)
+def get_blend_weights(freqs, crossover_f, blend_low_oct=0.50, blend_high_oct=0.75):
+    """Cosine crossfade: 0 below f_low, 1 above f_high, smooth blend in between."""
+    f_low = crossover_f / (2**blend_low_oct)
+    f_high = crossover_f * (2**blend_high_oct)
     weights = np.ones_like(freqs) 
     mask_target = freqs <= f_low
     mask_blend = (freqs > f_low) & (freqs < f_high)
@@ -152,7 +152,15 @@ def get_blend_weights(freqs, crossover_f):
 
 def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     print(f"\n--- Generating: {os.path.basename(output_path)} ---")
-    
+
+    # Resolve advanced params from args (with module-constant fallbacks for legacy calls)
+    processing_length    = getattr(args, 'processing_length',    PROCESSING_LENGTH)
+    norm_target_db       = getattr(args, 'norm_target_db',       NORM_TARGET_DB)
+    onset_buffer         = getattr(args, 'onset_buffer',         DEFAULT_ONSET_BUFFER)
+    onset_threshold      = getattr(args, 'onset_threshold',      0.05)
+    blend_low_oct        = getattr(args, 'blend_low_oct',        0.50)
+    blend_high_oct       = getattr(args, 'blend_high_oct',       0.75)
+
     out_sofa = raw_sofa.copy()
     hrirs = out_sofa.Data_IR.copy()
     src_fs = float(out_sofa.Data_SamplingRate)
@@ -171,17 +179,17 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
 
     # 2. Pad to Processing Length
     print("   2. Preparing HRIRs...")
-    if N < PROCESSING_LENGTH:
-        pad_amt = PROCESSING_LENGTH - N
+    if N < processing_length:
+        pad_amt = processing_length - N
         hrirs = np.pad(hrirs, ((0,0), (0,0), (0, pad_amt)), mode='constant')
-        N = PROCESSING_LENGTH
-    elif N > PROCESSING_LENGTH:
-        hrirs = hrirs[:, :, :PROCESSING_LENGTH]
-        N = PROCESSING_LENGTH
+        N = processing_length
+    elif N > processing_length:
+        hrirs = hrirs[:, :, :processing_length]
+        N = processing_length
 
     # 3. Global Impulse Alignment & Radius Harmonization
-    global_onset = find_global_onset(hrirs)
-    base_shift = DEFAULT_ONSET_BUFFER - global_onset
+    global_onset = find_global_onset(hrirs, threshold_ratio=onset_threshold)
+    base_shift = onset_buffer - global_onset
     
     if args.harmonize_radius:
         orig_r = get_dominant_radius(out_sofa.SourcePosition)
@@ -194,7 +202,7 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
         hrirs *= gain_multiplier
     else:
         total_shift = base_shift
-        print(f"   3. Global Impulse Alignment: Stripping {global_onset - DEFAULT_ONSET_BUFFER} samples of padding.")
+        print(f"   3. Global Impulse Alignment: Stripping {global_onset - onset_buffer} samples of padding.")
 
     # Execute the Time Shift (Preserving ITD)
     hrirs = np.roll(hrirs, total_shift, axis=-1)
@@ -218,7 +226,9 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     
     crossover_f = args.lf_crossover
     idx_xover = np.searchsorted(freqs, crossover_f)
-    blend_weights = get_blend_weights(freqs, crossover_f)
+    blend_weights = get_blend_weights(freqs, crossover_f,
+                                      blend_low_oct=blend_low_oct,
+                                      blend_high_oct=blend_high_oct)
     
     # Define Anchor Level (Level of Raw DF at crossover)
     anchor_level = np.mean(DF_mag[:, max(0, idx_xover-2):idx_xover+3], axis=-1, keepdims=True)
@@ -309,9 +319,9 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
 
     # 10. Normalize
     if not args.harmonize_radius:
-        print(f"   8. Normalizing to {NORM_TARGET_DB} dB...")
+        print(f"   8. Normalizing to {norm_target_db} dB...")
         peak = np.max(np.abs(hrirs))
-        target_linear = 10 ** (NORM_TARGET_DB / 20.0)
+        target_linear = 10 ** (norm_target_db / 20.0)
         if peak > 0:
             scale = target_linear / peak
             hrirs *= scale
@@ -370,10 +380,24 @@ def main():
     
     parser.add_argument("--lf-extend", action="store_true")
     parser.add_argument("--lf-crossover", type=float, default=375.0)
-    
+
     parser.add_argument("--harmonize-radius", action="store_true")
     parser.add_argument("--target-radius", type=float, default=1.2)
-    
+
+    # Advanced tunable parameters (forwarded from sofa.advanced config section)
+    parser.add_argument("--processing-length",  type=int,   default=PROCESSING_LENGTH,
+                        help="FFT/processing buffer size in samples")
+    parser.add_argument("--norm-target-db",      type=float, default=NORM_TARGET_DB,
+                        help="Peak normalization target in dB")
+    parser.add_argument("--onset-buffer",        type=int,   default=DEFAULT_ONSET_BUFFER,
+                        help="Samples of silence before the aligned impulse")
+    parser.add_argument("--onset-threshold",     type=float, default=0.05,
+                        help="Fraction of global peak used for onset detection")
+    parser.add_argument("--blend-low-oct",       type=float, default=0.50,
+                        help="Octaves below crossover for crossfade start")
+    parser.add_argument("--blend-high-oct",      type=float, default=0.75,
+                        help="Octaves above crossover for crossfade end")
+
     args = parser.parse_args()
 
     targets = []

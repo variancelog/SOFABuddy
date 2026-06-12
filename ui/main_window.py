@@ -4,10 +4,15 @@ from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from ui.tabs import FilesTab, SofaTab, DfhrtfTab
 from ui.workers import ProcessingWorker
 from ui import theme as T
+from core import config as C
 
-# Process button styles — two named states, built from theme constants
+# Action-bar button styles — named states built from theme constants
 _STYLE_BTN_PROCESS = f"background-color: {T.ACCENT}; color: {T.FG}; padding: 12px; font-weight: bold;"
 _STYLE_BTN_STOP    = f"background-color: {T.DANGER}; color: {T.FG}; padding: 12px; font-weight: bold;"
+_STYLE_BTN_RESET   = (
+    f"background-color: {T.BG_CONTROL}; color: {T.FG}; "
+    f"padding: 12px; font-weight: bold; min-width: 130px; max-width: 130px;"
+)
 
 class SofaBuddyMainWindow(QMainWindow):
     def __init__(self):
@@ -70,9 +75,14 @@ class SofaBuddyMainWindow(QMainWindow):
         top_layout.addWidget(self.stacked_widget)
 
         # Action Bar
+        action_bar = QHBoxLayout()
+        self.btn_reset = QPushButton("Reset Settings")
+        self.btn_reset.setStyleSheet(_STYLE_BTN_RESET)
         self.btn_process = QPushButton("Start Processing")
         self.btn_process.setStyleSheet(_STYLE_BTN_PROCESS)
-        top_layout.addWidget(self.btn_process)
+        action_bar.addWidget(self.btn_reset)
+        action_bar.addWidget(self.btn_process, stretch=1)
+        top_layout.addLayout(action_bar)
 
         splitter.addWidget(top_pane)
 
@@ -97,6 +107,7 @@ class SofaBuddyMainWindow(QMainWindow):
         self.tab_sofa.sofa_toggled.connect(self._on_sofa_toggled)
         self.tab_dfhrtf.dfhrtf_toggled.connect(self._on_dfhrtf_toggled)
         self.btn_process.clicked.connect(self._on_process_clicked)
+        self.btn_reset.clicked.connect(self._on_reset_clicked)
 
         # Connect file list model signals to update nav count
         file_list_model = self.tab_files.file_list.model()
@@ -106,6 +117,40 @@ class SofaBuddyMainWindow(QMainWindow):
 
         # Worker ref
         self.worker = None
+
+        # Restore persisted settings (after all widgets are built)
+        self._restore_settings()
+
+    def _restore_settings(self) -> None:
+        """Load persisted settings and push them into the tabs."""
+        mgr = C.manager()
+        cfg = mgr.load()
+
+        # Surface any validation warnings from the user's saved file
+        for w in mgr.warnings:
+            self.append_error(f"[Config] {w}")
+
+        self.tab_files.set_output_config(cfg.get('output', {}))
+        self.tab_sofa.set_config(cfg.get('sofa', {}))
+        self.tab_dfhrtf.set_config(cfg.get('dfhrtf', {}))
+
+    def _on_reset_clicked(self) -> None:
+        """Reset all settings to factory defaults and update the tabs."""
+        cfg = C.manager().reset()
+        self.tab_files.set_output_config(cfg.get('output', {}))
+        self.tab_sofa.set_config(cfg.get('sofa', {}))
+        self.tab_dfhrtf.set_config(cfg.get('dfhrtf', {}))
+        self.append_log("[Config] Settings reset to defaults.")
+
+    def closeEvent(self, event) -> None:
+        """Persist current settings when the window is closed."""
+        try:
+            snap = C.manager().snapshot(self.tab_files, self.tab_sofa, self.tab_dfhrtf)
+            C.manager().save(snap)
+        except Exception as exc:  # noqa: BLE001
+            # Never block shutdown due to a config-save failure
+            self.append_error(f"[Config] Could not save settings on close: {exc}")
+        super().closeEvent(event)
 
     def _update_file_count(self):
         total = self.tab_files.file_list.count()
@@ -174,11 +219,18 @@ class SofaBuddyMainWindow(QMainWindow):
             self.btn_process.setEnabled(False)
             return
 
+        # Snapshot live tab state over cached advanced/averaging sections, then persist.
+        # Do this on the main thread before the worker starts (stable dict for the worker).
+        mgr = C.manager()
+        snap = mgr.snapshot(self.tab_files, self.tab_sofa, self.tab_dfhrtf)
+        try:
+            mgr.save(snap)
+        except Exception as exc:  # noqa: BLE001
+            self.append_error(f"[Config] Could not save settings: {exc}")
+
         config = {
             'files':  self.tab_files.get_config(),
-            'output': self.tab_files.get_output_config(),
-            'sofa':   self.tab_sofa.get_config(),
-            'dfhrtf': self.tab_dfhrtf.get_config()
+            **snap,  # includes output, sofa (with advanced), dfhrtf (with advanced), averaging
         }
 
         self.btn_process.setText("Stop Processing")

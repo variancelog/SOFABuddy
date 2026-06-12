@@ -1,0 +1,127 @@
+{
+  "C:\\coding_projects\\sofa_buddy\\core\\averaging.py": {
+    "mtime": 1781234905.9228828,
+    "ast_hash": "1722fbee3fc17417cc8a860f75b9e1b7",
+    "semantic_hash": "1722fbee3fc17417cc8a860f75b9e1b7"
+  },
+  "C:\\coding_projects\\sofa_buddy\\core\\dfhrtf_processor.py": {
+    "mtime": 1781237287.6062293,
+    "ast_hash": "930f0530c43cae4af66a2a9fdc0f2abe",
+    "semantic_hash": "930f0530c43cae4af66a2a9fdc0f2abe"
+  },
+  "C:\\coding_projects\\sofa_buddy\\core\\scripts\\generate_dfhrtf.py": {
+    "mtime": 1781234884.0574856,
+    "ast_hash": "e236a01b567a4e7841f7ede7ca63342f",
+    "semantic_hash": "e236a01b567a4e7841f7ede7ca63342f"
+  },
+  "C:\\coding_projects\\sofa_buddy\\core\\scripts\\generate_sofa.py": {
+    "mtime": 1781234807.8025644,
+    "ast_hash": "ccc58b2558add37638627a4fee5560e8",
+    "semantic_hash": "ccc58b2558add37638627a4fee5560e8"
+  },
+  "C:\\coding_projects\\sofa_buddy\\core\\sofa_processor.py": {
+    "mtime": 1781237251.9983003,
+    "ast_hash": "43e1f67a0ef87b796b4e5840158d0d83",
+    "semantic_hash": "43e1f67a0ef87b796b4e5840158d0d83"
+  },
+  "C:\\coding_projects\\sofa_buddy\\core\\sofa_utils.py": {
+    "mtime": 1781151986.1408298,
+    "ast_hash": "8c4f5c4594e6adabce6ad08e3cbb8317",
+    "semantic_hash": "8c4f5c4594e6adabce6ad08e3cbb8317"
+  },
+  "C:\\coding_projects\\sofa_buddy\\ui\\__init__.py": {
+    "mtime": 1779168805.7010746,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "C:\\coding_projects\\sofa_buddy\\ui\\main_window.py": {
+    "mtime": 1781234653.2738085,
+    "ast_hash": "d62595d5443d401355021d20e2c53bcb",
+    "semantic_hash": "d62595d5443d401355021d20e2c53bcb"
+  },
+  "C:\\coding_projects\\sofa_buddy\\ui\\tabs.py": {
+    "mtime": 1781237246.7003083,
+    "ast_hash": "f7bc5f1e3f0d3e90f120bfff5836b5ef",
+    "semantic_hash": "f7bc5f1e3f0d3e90f120bfff5836b5ef"
+  },
+  "C:\\coding_projects\\sofa_buddy\\ui\\theme.py": {
+    "mtime": 1780548012.0729625,
+    "ast_hash": "780f101081c8bb0950c1f7e1d2c0c9a3",
+    "semantic_hash": "780f101081c8bb0950c1f7e1d2c0c9a3"
+  },
+  "C:\\coding_projects\\sofa_buddy\\ui\\widgets.py": {
+    "mtime": 1781234557.9028227,
+    "ast_hash": "23f19db7a080bade0b7381e55dfb6df2",
+    "semantic_hash": "23f19db7a080bade0b7381e55dfb6df2"
+  },
+  "C:\\coding_projects\\sofa_buddy\\ui\\workers.py": {
+    "mtime": 1780455652.9002154,
+    "ast_hash": "9375adf452234216801238497caca2ac",
+    "semantic_hash": "9375adf452234216801238497caca2ac"
+  },
+  "C:\\coding_projects\\sofa_buddy\\CHANGELOG.md": {
+    "mtime": 1780549918.535078,
+    "ast_hash": "2a4f4346568a02f570d3ea68cd4094e9",
+    "semantic_hash": "2a4f4346568a02f570d3ea68cd4094e9"
+  },
+  "C:\\coding_projects\\sofa_buddy\\CLAUDE.md": {
+    "mtime": 1780455661.6625073,
+    "ast_hash": "f9cdf492cf1d96ab0fce08b1252f91d1",
+    "semantic_hash": "f9cdf492cf1d96ab0fce08b1252f91d1"
+  },
+  "C:\\coding_projects\\sofa_buddy\\README.md": {
+    "mtime": 1780289216.8332815,
+    "ast_hash": "4f745e43e079b0fd1c78fef8c5ce9c6a",
+    "semantic_hash": "4f745e43e079b0fd1c78fef8c5ce9c6a"
+  },
+  "C:\\coding_projects\\sofa_buddy\\data\\lf_ref_mag.txt": {
+    "mtime": 1779909497.5481963,
+    "ast_hash": "b30861ef4bd0aa8afa92700966dd47f2",
+    "semantic_hash": "b30861ef4bd0aa8afa92700966dd47f2"
+  },
+  "C:\\coding_projects\\sofa_buddy\\requirements.txt": {
+    "mtime": 1780549232.1096752,
+    "ast_hash": "1471aa6b8837d3e06459a18558647e87",
+    "semantic_hash": "1471aa6b8837d3e06459a18558647e87"
+  },
+  "C:\\coding_projects\\sofa_buddy\\grid_original.png": {
+    "mtime": 1781237532.0454588,
+    "ast_hash": "e8a6a14445b612a0e3a7e20232e4dcf8",
+    "semantic_hash": "e8a6a14445b612a0e3a7e20232e4dcf8"
+  },
+  "C:\\coding_projects\\sofa_buddy\\core\\config.py": {
+    "mtime": 1781234544.0813766,
+    "ast_hash": "3e1a99b152aeda1c66109aa3b4328d82",
+    "semantic_hash": "3e1a99b152aeda1c66109aa3b4328d82"
+  },
+  "C:\\coding_projects\\sofa_buddy\\core\\default_settings.json": {
+    "mtime": 1781237370.7755945,
+    "ast_hash": "584a8d3bc42a7a42f40a89e7d1cf1cd0",
+    "semantic_hash": "584a8d3bc42a7a42f40a89e7d1cf1cd0"
+  },
+  "C:\\coding_projects\\sofa_buddy\\SofaBuddy_Tab1_Files.png": {
+    "mtime": 1781237677.7451422,
+    "ast_hash": "b6081ecca89614baa65ae07022448799",
+    "semantic_hash": "b6081ecca89614baa65ae07022448799"
+  },
+  "C:\\coding_projects\\sofa_buddy\\SofaBuddy_Tab2_SOFA.png": {
+    "mtime": 1781238164.6619742,
+    "ast_hash": "ed7f14e3ffaa01b141ca711727c0e11d",
+    "semantic_hash": "ed7f14e3ffaa01b141ca711727c0e11d"
+  },
+  "C:\\coding_projects\\sofa_buddy\\SofaBuddy_Tab3_DFHRTF.png": {
+    "mtime": 1781238076.4780388,
+    "ast_hash": "c9d10800ba664730638c74b588ca4b43",
+    "semantic_hash": "c9d10800ba664730638c74b588ca4b43"
+  },
+  "C:\\coding_projects\\sofa_buddy\\plot_grid_raw.png": {
+    "mtime": 1781143631.6415324,
+    "ast_hash": "44d38f02ea5179e0e9b47b327a300b1c",
+    "semantic_hash": "44d38f02ea5179e0e9b47b327a300b1c"
+  },
+  "C:\\coding_projects\\sofa_buddy\\plot_grid_weighted.png": {
+    "mtime": 1781237937.6887274,
+    "ast_hash": "d65f5ad50a33f2b0d893b81a5fb5ce34",
+    "semantic_hash": "d65f5ad50a33f2b0d893b81a5fb5ce34"
+  }
+}
