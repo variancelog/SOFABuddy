@@ -587,6 +587,7 @@ class DfhrtfTab(QWidget):
             "&bull; {filename} source SOFA filename;<br>"
             "&bull; {folder} source file's parent folder name;<br>"
             "&bull; {samplerate} source SOFA samplerate;<br>"
+            "&bull; {tilt} spectral tilt in dB/oct;<br>"
             "&bull; {LR} L/R/Avg.;<br>"
             "&bull; {algo} averaging algorithm (global average only).</p>"
         )
@@ -623,6 +624,7 @@ class DfhrtfTab(QWidget):
             "&bull; {filename} source SOFA filename;<br>"
             "&bull; {folder} source file's parent folder name;<br>"
             "&bull; {samplerate} source SOFA samplerate;<br>"
+            "&bull; {tilt} spectral tilt in dB/oct;<br>"
             "&bull; {graphtype} df / stereo / weighted.</p>"
         )
         self.dd_graph_ext = FlameDropdown("Extension")

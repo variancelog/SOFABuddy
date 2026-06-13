@@ -68,6 +68,7 @@ Output filenames are built from templates containing substitution variables. Var
 | `{folder}` | Source file's parent folder name | SOFA naming, DFHRTF text, DFHRTF graphs |
 | `{samplerate}` | Output samplerate (e.g. `48000`) | SOFA naming, DFHRTF text, DFHRTF graphs |
 | `{eq}` | EQ variant (`uneq` or `dfeq`) | SOFA naming only |
+| `{tilt}` | Spectral tilt value in dB/oct (e.g. `0.0`, `-0.5`) | DFHRTF text, DFHRTF graphs, global-average text |
 | `{LR}` | Channel (`L`, `R`, or `Avg`) | DFHRTF text only |
 | `{graphtype}` | Plot type (`df`, `stereo`, or `weighted`) | DFHRTF graphs only |
 | `{algo}` | Short algo name (`arithmean`, `geoarc`, `softdtw`) | Global-average text files only |

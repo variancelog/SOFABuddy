@@ -332,6 +332,18 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     # 11. Save
     out_sofa.Data_IR = hrirs.astype(np.float32)
     out_sofa.Data_SamplingRate = float(target_fs)
+    # SOFA convention requires all *_Units values to be lowercase.
+    # Some source files carry "Hertz" / "Metres" which sofar rejects on write.
+    # Must iterate instance attributes (vars(obj)), not the class namespace —
+    # sofar stores Data_SamplingRate_Units etc. on the instance, not the class.
+    for _attr in list(vars(out_sofa)):
+        if _attr.endswith("_Units"):
+            try:
+                _val = getattr(out_sofa, _attr)
+                if isinstance(_val, str) and _val != _val.lower():
+                    setattr(out_sofa, _attr, _val.lower())
+            except Exception:
+                pass
     sf.write_sofa(output_path, out_sofa)
     print(f"   [+] Saved {os.path.basename(output_path)}")
 
@@ -483,4 +495,22 @@ def main():
     print("\n[SUCCESS] All files generated.")
 
 if __name__ == "__main__":
-    main()
+    import traceback
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        # Ensure a full traceback is always captured by the parent process
+        input_hint = ""
+        try:
+            import sys as _sys
+            for _i, _a in enumerate(_sys.argv):
+                if _a == "--input" and _i + 1 < len(_sys.argv):
+                    input_hint = f"\n  Input: {_sys.argv[_i + 1]}"
+                    break
+        except Exception:
+            pass
+        print(f"\n[UNCAUGHT EXCEPTION]{input_hint}", flush=True)
+        traceback.print_exc()
+        sys.exit(1)

@@ -1,8 +1,8 @@
 import os
 import sys
-import subprocess
 
 from core.dfhrtf_processor import SOFA_MASTERED_DIR  # shared constant
+from core.subprocess_utils import new_run_log, run_task
 
 def process_sofa_exports(config, progress_callback, log_callback, error_callback, stop_checker=None):
     """
@@ -100,7 +100,8 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
 
                     tasks.append({
                         'cmd': cmd,
-                        'desc': f"{base_name} ({sr}Hz, {eq_label})"
+                        'desc': f"{base_name} ({sr}Hz, {eq_label})",
+                        'input_path': file_path,
                     })
 
         # 3. Execute Tasks
@@ -108,39 +109,44 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
         if total_tasks == 0:
             return True
 
+        log_root = custom_dir if not use_default else os.path.dirname(files[0])
+        log_path = new_run_log("sofa", log_root)
+        error_callback(f"[Diagnostics log: {log_path}]")
+
+        failures = []  # list of (desc, returncode)
+
         for i, task in enumerate(tasks):
             if stop_checker and stop_checker():
                 return False
 
             progress_val = int((i / total_tasks) * 100)
             progress_callback(progress_val, f"Exporting: {task['desc']}")
-            
-            creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            
-            # Start process with stdout/stderr piped
-            process = subprocess.Popen(
+
+            rc, _ = run_task(
                 task['cmd'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                creationflags=creation_flags
+                task['desc'],
+                task['input_path'],
+                log_callback,
+                stop_checker,
+                log_path,
+                error_callback=error_callback,
             )
-            
-            # Read and log output in real-time
-            for line in iter(process.stdout.readline, ''):
-                if stop_checker and stop_checker():
-                    process.terminate()
-                    process.wait()
-                    return False
-                if line:
-                    log_callback(line.rstrip('\n'))
-            
-            process.stdout.close()
-            returncode = process.wait()
-            
-            if returncode != 0:
-                error_callback(f"Failed to generate {task['desc']} (Exit code {returncode})")
-            
+
+            if rc is None:
+                # stop_checker fired inside run_task
+                return False
+
+            if rc != 0:
+                failures.append((task['desc'], rc))
+
+        if failures:
+            error_callback(
+                f"SOFA export: {len(failures)}/{total_tasks} tasks failed "
+                f"— see inline blocks above and log: {log_path}"
+            )
+            for desc, rc in failures:
+                error_callback(f"  - {desc}  (exit {rc})")
+
         return True
 
     except Exception as e:

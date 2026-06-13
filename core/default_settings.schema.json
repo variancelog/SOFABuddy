@@ -1,0 +1,360 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SOFA Buddy Settings",
+  "description": "Factory defaults for SOFA Buddy.  Surfaced settings are managed by the UI; advanced.* and averaging.* keys must be edited here.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Internal version identifier used by the migration path in config.py. Do not change manually."
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": "boolean",
+          "description": "Use per-source-folder output locations. When true, each SOFA file is written alongside its source folder; when false the single custom 'folder' path is used as the shared root."
+        },
+        "folder": {
+          "type": "string",
+          "description": "Custom output root folder path.  Only used when 'default' is false."
+        }
+      },
+      "description": "Output path configuration."
+    },
+    "sofa": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the SOFA mastering stage. Input SOFA files are resampled, globally aligned, and optionally radius-normalised and DF-equalised before DFHRTF analysis."
+        },
+        "samplerates": {
+          "type": "array",
+          "items": {
+            "enum": [
+              44100,
+              48000,
+              96000
+            ]
+          },
+          "uniqueItems": true,
+          "minItems": 1,
+          "description": "Target samplerates (Hz) to export. Each selected samplerate produces a separate mastered SOFA file."
+        },
+        "phase_mode": {
+          "enum": [
+            "Original Phase"
+          ],
+          "description": "Phase treatment for the HRIR output. 'Original Phase' preserves the measured phase response unmodified."
+        },
+        "lf_extension": {
+          "type": "boolean",
+          "description": "Extend the HRIR below the measurement's reliable low-frequency limit by blending in a synthetic min-phase signal derived from the reference LF curve (data/lf_ref_mag.txt)."
+        },
+        "xover": {
+          "type": "number",
+          "minimum": 200.0,
+          "maximum": 500.0,
+          "description": "Crossover frequency (Hz) for LF extension blending. The synthetic LF signal is spliced in below this frequency; blend width is controlled by advanced.blend_low_oct / blend_high_oct."
+        },
+        "uneq": {
+          "type": "boolean",
+          "description": "Output an un-equalized (raw diffuse-field) SOFA file in addition to the DF-equalized variant."
+        },
+        "dfeq": {
+          "type": "boolean",
+          "description": "Apply diffuse-field equalization \u2014 each HRIR is divided by the geometry-weighted DF average response so the net speaker-to-ear transfer is flat on average."
+        },
+        "normalize_distance": {
+          "type": "boolean",
+          "description": "Harmonize all HRIRs to a common listening radius using physics-based delay correction (sample-accurate fractional delay) and inverse-square gain scaling."
+        },
+        "distance_m": {
+          "type": "number",
+          "minimum": 1.0,
+          "maximum": 2.0,
+          "description": "Target listening radius in metres for distance normalization. Typical values are 1.0 \u2013 2.0 m."
+        },
+        "hrir_length": {
+          "type": "number",
+          "minimum": 128,
+          "maximum": 1024,
+          "description": "Output HRIR length in samples after processing and windowing. Shorter lengths reduce CPU/memory cost at the expense of LF resolution."
+        },
+        "naming": {
+          "type": "string",
+          "description": "Output filename template for mastered SOFA files. Supported variables: {folder}, {filename}, {samplerate}, {eq}."
+        },
+        "advanced": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "processing_length": {
+              "type": "integer",
+              "minimum": 512,
+              "maximum": 8192,
+              "description": "Internal FFT processing length in samples. Must be \u2265 hrir_length; larger values reduce time-domain aliasing during convolution steps."
+            },
+            "norm_target_db": {
+              "type": "number",
+              "minimum": -12.0,
+              "maximum": 0.0,
+              "description": "Peak normalization target level in dBFS applied to each output SOFA file after all processing."
+            },
+            "onset_buffer": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 256,
+              "description": "Extra samples prepended before the detected HRIR onset when aligning impulse responses. Provides headroom for pre-ringing."
+            },
+            "onset_threshold_ratio": {
+              "type": "number",
+              "minimum": 0.001,
+              "maximum": 0.5,
+              "description": "Fraction of the HRIR's peak amplitude used to detect the onset sample (first sample that exceeds peak \u00d7 threshold)."
+            },
+            "blend_low_oct": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 2.0,
+              "description": "Lower fade width in octaves below sofa.xover. The synthetic LF signal starts blending in at xover / 2^blend_low_oct."
+            },
+            "blend_high_oct": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 2.0,
+              "description": "Upper fade width in octaves above sofa.xover. The original signal is fully restored at xover \u00d7 2^blend_high_oct."
+            }
+          },
+          "description": "Advanced SOFA mastering tunables. Not surfaced in the UI \u2014 edit this file directly."
+        }
+      },
+      "description": "SOFA mastering stage settings."
+    },
+    "dfhrtf": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the DFHRTF extraction stage. Computes geometry-weighted spectral averages from SOFA files, applies smoothing and tilt, and writes text and/or graph outputs."
+        },
+        "per_sofa_lr": {
+          "type": "boolean",
+          "description": "Write separate per-channel (L and R) DFHRTF text files for each SOFA file."
+        },
+        "per_sofa_avg": {
+          "type": "boolean",
+          "description": "Write a single averaged DFHRTF text file per SOFA file, combining L and R via the algorithm selected in per_sofa_avg_algo."
+        },
+        "per_sofa_avg_algo": {
+          "enum": [
+            "Arithmetic Mean",
+            "Geo-Arc-Length",
+            "Soft-DTW"
+          ],
+          "description": "Algorithm used to average the L and R DFHRTF curves when writing per-SOFA average outputs."
+        },
+        "text_filename": {
+          "type": "string",
+          "description": "Text output filename template. Supported variables: {folder}, {filename}, {samplerate}, {tilt}, {LR}."
+        },
+        "text_delimiter": {
+          "enum": [
+            "Tab",
+            "Comma",
+            "Semicolon",
+            "Space"
+          ],
+          "description": "Column delimiter written in DFHRTF text output files."
+        },
+        "text_extension": {
+          "enum": [
+            "txt",
+            "csv"
+          ],
+          "description": "File extension for DFHRTF text output files."
+        },
+        "dfhrtf_graphs": {
+          "type": "boolean",
+          "description": "Generate a DFHRTF magnitude plot for each processed SOFA file."
+        },
+        "stereo_graphs": {
+          "type": "boolean",
+          "description": "Generate \u00b1stereo_angle_deg comparison graphs showing the L and R off-axis curves alongside the DFHRTF."
+        },
+        "weighted_grid": {
+          "type": "boolean",
+          "description": "Generate a geometry-weighted measurement grid visualization plot."
+        },
+        "weighted_grid_scope": {
+          "enum": [
+            "Per Folder",
+            "All Files"
+          ],
+          "description": "Whether the weighted grid plot is computed per source folder or once across all input files."
+        },
+        "graph_filename": {
+          "type": "string",
+          "description": "Graph output filename template. Supported variables: {folder}, {filename}, {samplerate}, {tilt}, {graphtype}."
+        },
+        "graph_extension": {
+          "enum": [
+            "png",
+            "jpg"
+          ],
+          "description": "Image format for graph output files."
+        },
+        "smoothing": {
+          "enum": [
+            3,
+            6,
+            12,
+            24,
+            48
+          ],
+          "description": "Fractional-octave smoothing bandwidth applied to the DFHRTF magnitude curve (e.g. 24 = 1/24-octave smoothing)."
+        },
+        "tilt": {
+          "type": "number",
+          "minimum": -2.0,
+          "maximum": 1.0,
+          "description": "Spectral tilt applied to the DFHRTF output in dB/octave. Negative values roll off the high frequencies; 0.0 means no tilt."
+        },
+        "extend_lf": {
+          "type": "boolean",
+          "description": "Extend the DFHRTF below its reliable LF limit by blending in the reference LF curve (data/lf_ref_mag.txt)."
+        },
+        "xover": {
+          "type": "number",
+          "minimum": 200.0,
+          "maximum": 500.0,
+          "description": "Crossover frequency (Hz) for DFHRTF LF extension blending."
+        },
+        "avg_all": {
+          "type": "boolean",
+          "description": "Compute a global average DFHRTF across all processed SOFA files after per-file extraction completes."
+        },
+        "algo": {
+          "enum": [
+            "Arithmetic Mean",
+            "Geo-Arc-Length",
+            "Soft-DTW"
+          ],
+          "description": "Algorithm used for global multi-file averaging."
+        },
+        "exclude_outliers": {
+          "type": "boolean",
+          "description": "Remove curves whose pairwise Soft-DTW distance from the median exceeds averaging.outlier_threshold_std standard deviations before global averaging."
+        },
+        "advanced": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "n_fft": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65536,
+              "description": "FFT size for DFHRTF spectral computation. Larger values give finer frequency resolution but increase processing time."
+            },
+            "output_octave_fraction": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 96,
+              "description": "Output frequency grid resolution in fractional octaves for DFHRTF text files (e.g. 48 = 1/48-octave spacing)."
+            },
+            "norm_freq_hz": {
+              "type": "number",
+              "minimum": 100.0,
+              "maximum": 20000.0,
+              "description": "Reference frequency (Hz) at which the DFHRTF magnitude is normalized to 0 dB before writing outputs."
+            },
+            "lf_blend_low_oct": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 2.0,
+              "description": "Lower fade width in octaves below dfhrtf.xover for DFHRTF LF extension blending."
+            },
+            "lf_blend_high_oct": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 2.0,
+              "description": "Upper fade width in octaves above dfhrtf.xover for DFHRTF LF extension blending."
+            },
+            "stereo_angle_deg": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 90.0,
+              "description": "Azimuth angle (degrees) used when extracting L/R off-axis curves for stereo graph outputs."
+            }
+          },
+          "description": "Advanced DFHRTF extraction tunables. Not surfaced in the UI \u2014 edit this file directly."
+        }
+      },
+      "description": "DFHRTF extraction stage settings."
+    },
+    "averaging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "num_points": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 4096,
+          "description": "Number of log-spaced frequency points onto which all DFHRTF curves are resampled before averaging."
+        },
+        "outlier_threshold_std": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 10.0,
+          "description": "Outlier rejection threshold in standard deviations above the median pairwise distance. Curves exceeding median + N\u00d7std are removed."
+        },
+        "outlier_gamma": {
+          "type": "number",
+          "minimum": 0.001,
+          "maximum": 10.0,
+          "description": "Soft-DTW gamma parameter used during outlier detection. Controls the softness of the distance metric (higher = smoother gradient)."
+        },
+        "softdtw_gamma_persofa": {
+          "type": "number",
+          "minimum": 0.0001,
+          "maximum": 10.0,
+          "description": "Soft-DTW gamma parameter for per-SOFA L+R barycenter averaging. Smaller values approach hard-DTW; larger values approach Euclidean mean."
+        },
+        "softdtw_gamma_global": {
+          "type": "number",
+          "minimum": 0.0001,
+          "maximum": 10.0,
+          "description": "Soft-DTW gamma parameter for global multi-file barycenter averaging."
+        },
+        "softdtw_max_iter": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 200,
+          "description": "Maximum L-BFGS-B iterations for the Soft-DTW barycenter optimizer."
+        },
+        "softdtw_tol": {
+          "type": "number",
+          "minimum": 1e-08,
+          "maximum": 1.0,
+          "description": "Convergence tolerance for the Soft-DTW barycenter optimizer. Iteration stops when the gradient norm falls below this value."
+        },
+        "geo_arc_y_scale": {
+          "type": "number",
+          "minimum": 0.0001,
+          "maximum": 10.0,
+          "description": "Y-axis scale factor applied before arc-length parameterization in the geometric arc-length blend algorithm. Balances frequency vs. magnitude contribution to curve distance."
+        }
+      },
+      "description": "Global averaging pipeline settings. Not surfaced in the UI \u2014 edit this file directly."
+    }
+  }
+}

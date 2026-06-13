@@ -241,6 +241,7 @@ def main():
     # Refinement Parameters
     parser.add_argument("--smoothing", type=int, default=48, help="Smoothing fraction (e.g. 24 for 1/24th octave)")
     parser.add_argument("--tilt", type=float, default=0.0, help="Spectral Tilt (dB/oct)")
+    parser.add_argument("--lr-avg-gamma", type=float, default=0.01, help="Soft-DTW gamma for per-SOFA L/R average")
     parser.add_argument("--lf_ext_dfhrtf", action="store_true", help="Enable Low Frequency extension using reference file")
     parser.add_argument("--lf_ext_dfhrtf_xover", type=float, default=375.0, help="Crossover frequency for LF extension")
 
@@ -354,7 +355,7 @@ def main():
             avg_norm = CurveAverager.geometric_arc_length_blend(norm_freqs, norm * 0.01) / 0.01
         elif args.avg_algo == "Soft-DTW":
             print("   -> Running Soft-DTW L/R average...")
-            avg_norm = CurveAverager.soft_dtw_barycenter(norm, gamma=0.01)
+            avg_norm = CurveAverager.soft_dtw_barycenter(norm, gamma=args.lr_avg_gamma)
         else:
             avg_norm = CurveAverager.arithmetic_mean(norm)
         val_avg = CommonAxisInterpolator.unnormalize_magnitude(avg_norm, mag_min, mag_max)
@@ -506,4 +507,22 @@ def main():
             save_text_data(avg_path, target_freqs, val_avg, args.delimiter)
 
 if __name__ == "__main__":
-    main()
+    import traceback
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        # Ensure a full traceback is always captured by the parent process
+        input_hint = ""
+        try:
+            import sys as _sys
+            for _i, _a in enumerate(_sys.argv):
+                if _a == "--input" and _i + 1 < len(_sys.argv):
+                    input_hint = f"\n  Input: {_sys.argv[_i + 1]}"
+                    break
+        except Exception:
+            pass
+        print(f"\n[UNCAUGHT EXCEPTION]{input_hint}", flush=True)
+        traceback.print_exc()
+        sys.exit(1)
