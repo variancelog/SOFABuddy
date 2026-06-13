@@ -18,7 +18,7 @@ A desktop GUI for mastering SOFA HRTF files and extracting diffuse-field HRTF (D
 - **Three averaging algorithms** for global and per-SOFA averages: Arithmetic Mean, Geo-Arc-Length, and Soft-DTW barycenter
 - **Outlier exclusion** filters anomalous curves before averaging
 - **Grid visualization**: inspect measurement grids as 3D scatter plots; export solid-angle weight maps
-- **Flexible filename templates** with `{filename}`, `{folder}`, `{samplerate}`, `{eq}`, `{LR}`, `{graphtype}`, and `{algo}` variables
+- **Flexible filename templates** with `{filename}`, `{folder}`, `{samplerate}`, `{eq}`, `{tilt}`, `{LR}`, `{graphtype}`, and `{algo}` variables
 - **Config persistence**: all settings auto-save and restore across sessions; Reset Settings returns to factory defaults
 - **Default and Custom output folder modes**
 
@@ -146,6 +146,7 @@ All filename fields support substitution variables enclosed in `{` `}`:
 | `{folder}` | Source file's parent folder name | SOFA naming, DFHRTF text, DFHRTF graphs |
 | `{samplerate}` | Output samplerate (e.g. `48000`) | SOFA naming, DFHRTF text, DFHRTF graphs |
 | `{eq}` | EQ variant: `uneq` or `dfeq` | SOFA naming only |
+| `{tilt}` | Spectral tilt value in dB/oct (e.g. `0.0`, `-0.5`) | DFHRTF text, DFHRTF graphs, global-average text |
 | `{LR}` | Channel: `L`, `R`, or `Avg` | DFHRTF text only |
 | `{graphtype}` | Plot type: `df`, `stereo`, or `weighted` | DFHRTF graphs only |
 | `{algo}` | Short algorithm name: `arithmean`, `geoarc`, `softdtw` | Global-average text files only |

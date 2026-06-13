@@ -1,4 +1,5 @@
 {
+  "$schema": "./default_settings.schema.json",
   "schema_version": 1,
   "output": {
     "default": true,
@@ -15,7 +16,7 @@
     "normalize_distance": true,
     "distance_m": 1.2,
     "hrir_length": 512,
-    "naming": "so_{folder}_{filename}_{samplerate}_{eq}",
+    "naming": "s_{folder}_{filename}_{samplerate}_{eq}",
     "advanced": {
       "processing_length": 2048,
       "norm_target_db": -1.0,
@@ -30,14 +31,14 @@
     "per_sofa_lr": true,
     "per_sofa_avg": false,
     "per_sofa_avg_algo": "Soft-DTW",
-    "text_filename": "gr_{folder}_{filename}_{LR}",
+    "text_filename": "t_{folder}_{filename}_{LR}",
     "text_delimiter": "Tab",
     "text_extension": "txt",
     "dfhrtf_graphs": true,
     "stereo_graphs": false,
-    "weighted_grid": false,
+    "weighted_grid": true,
     "weighted_grid_scope": "Per Folder",
-    "graph_filename": "tx_{folder}_{filename}_{graphtype}",
+    "graph_filename": "g_{folder}_{filename}_{graphtype}_LR",
     "graph_extension": "png",
     "smoothing": 24,
     "tilt": 0.0,
@@ -59,7 +60,8 @@
     "num_points": 512,
     "outlier_threshold_std": 1.0,
     "outlier_gamma": 1.0,
-    "softdtw_gamma": 0.01,
+    "softdtw_gamma_persofa": 0.01,
+    "softdtw_gamma_global": 0.03,
     "softdtw_max_iter": 25,
     "softdtw_tol": 0.001,
     "geo_arc_y_scale": 0.01

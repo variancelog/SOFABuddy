@@ -17,7 +17,7 @@ _STYLE_BTN_RESET   = (
 class SofaBuddyMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SOFA Buddy")
+        self.setWindowTitle("SOFA Buddy v0.2.0")
         self.resize(800, 600)
         self.setStyleSheet(f"background-color: {T.BG_BASE};")
 

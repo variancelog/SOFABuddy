@@ -1,8 +1,9 @@
 import os
 import sys
-import subprocess
 import glob
 import numpy as np
+
+from core.subprocess_utils import new_run_log, run_task
 
 # Shared folder-name constants (single definition; avoids silent drift between files)
 SOFA_MASTERED_DIR = "sofa_mastered"
@@ -30,7 +31,7 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
     num_points       = int(p.get('num_points', 512))
     threshold_std    = float(p.get('outlier_threshold_std', 1.0))
     outlier_gamma    = float(p.get('outlier_gamma', 1.0))
-    softdtw_gamma    = float(p.get('softdtw_gamma', 0.01))
+    softdtw_gamma    = float(p.get('softdtw_gamma_global', 0.03))
     softdtw_max_iter = int(p.get('softdtw_max_iter', 25))
     softdtw_tol      = float(p.get('softdtw_tol', 0.001))
     geo_arc_y_scale  = float(p.get('geo_arc_y_scale', 0.01))
@@ -129,9 +130,13 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             error_callback("Output Folder: No custom folder selected. Choose a folder or switch to Default.")
             return False
 
-        # Hoist delimiter computation so it's available for averaging even if no files ran
+        # Hoist delimiter and shared params so they're available for averaging even if no files ran
         delim_map = {"Tab": "\t", "Comma": ",", "Semicolon": ";", "Space": " "}
         delim = delim_map.get(df_cfg.get('text_delimiter', "Tab"), "\t")
+        avg_params = config.get('averaging', {})
+
+        # Format tilt as one decimal place for use in filename templates
+        tilt_str = f"{float(df_cfg.get('tilt', 0.0)):.1f}"
 
         # 2. Determine Input Files
         resolved_inputs = []  # (input_path, base_name, sr_label, src_dir)
@@ -184,6 +189,12 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
 
         # 3. Execution
         total_inputs = len(resolved_inputs)
+        log_root = custom_dir if not use_default else os.path.dirname(files[0])
+        log_path = new_run_log("dfhrtf", log_root)
+        error_callback(f"[Diagnostics log: {log_path}]")
+
+        failures = []  # list of (base_name, returncode)
+
         for i, (input_path, base_name, sr_label, src_dir) in enumerate(resolved_inputs):
             if stop_checker and stop_checker(): return False
 
@@ -214,6 +225,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             cmd.extend(["--lf-blend-low-oct",      str(float(dfhrtf_adv.get('lf_blend_low_oct', 0.50)))])
             cmd.extend(["--lf-blend-high-oct",     str(float(dfhrtf_adv.get('lf_blend_high_oct', 1.0)))])
             cmd.extend(["--stereo-angle",           str(float(dfhrtf_adv.get('stereo_angle_deg', 30.0)))])
+            cmd.extend(["--lr-avg-gamma",           str(float(avg_params.get('softdtw_gamma_persofa', 0.01)))])
 
             cmd.extend(["--delimiter", delim])
 
@@ -221,10 +233,11 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             ext = f".{df_cfg.get('text_extension', 'txt')}"
             template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
 
-            def get_text_path(lr_val, _base=base_name, _sr=sr_label, _ext=ext, _root=output_root, _tmpl=template, _folder=folder_name):
+            def get_text_path(lr_val, _base=base_name, _sr=sr_label, _ext=ext, _root=output_root, _tmpl=template, _folder=folder_name, _tilt=tilt_str):
                 fname = _tmpl.replace("{filename}", _base)
                 fname = fname.replace("{folder}", _folder)
                 fname = fname.replace("{samplerate}", _sr)
+                fname = fname.replace("{tilt}", _tilt)
                 fname = fname.replace("{LR}", lr_val)
                 # Remove {algo} and any preceding/succeeding underscores for per-sofa
                 fname = fname.replace("_{algo}", "").replace("{algo}_", "").replace("{algo}", "")
@@ -248,7 +261,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 graph_template = df_cfg.get('graph_filename', "{filename}")
                 graph_ext = f".{df_cfg.get('graph_extension', 'png')}"
 
-                gname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{graphtype}", "df")
+                gname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{tilt}", tilt_str).replace("{graphtype}", "df")
                 if not gname.endswith(graph_ext): gname += graph_ext
                 cmd.extend(["--graph-out", os.path.join(output_root, gname)])
 
@@ -256,7 +269,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 graph_template = df_cfg.get('graph_filename', "{filename}")
                 graph_ext = f".{df_cfg.get('graph_extension', 'png')}"
 
-                sname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{graphtype}", "stereo")
+                sname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{tilt}", tilt_str).replace("{graphtype}", "stereo")
 
                 # Fallback: If {graphtype} wasn't used in the template, append '_stereo' manually
                 # so stereo graphs don't overwrite DF graphs.
@@ -278,7 +291,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 emit_weighted = (scope == 'All Files') or (output_root not in seen_grid_dirs)
                 if emit_weighted:
                     seen_grid_dirs.add(output_root)
-                    wname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{graphtype}", "weighted")
+                    wname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{tilt}", tilt_str).replace("{graphtype}", "weighted")
 
                     # Fallback: if {graphtype} wasn't used in the template, append '_weighted'
                     if "{graphtype}" not in graph_template:
@@ -292,20 +305,30 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                     cmd.extend(["--graph-weighted-out", os.path.join(output_root, wname)])
 
             # Run Subprocess
-            creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, creationflags=creation_flags
+            rc, _ = run_task(
+                cmd,
+                base_name,
+                input_path,
+                log_callback,
+                stop_checker,
+                log_path,
+                error_callback=error_callback,
             )
-            for line in iter(process.stdout.readline, ''):
-                if stop_checker and stop_checker():
-                    process.terminate()
-                    process.wait()
-                    return False
-                if line: log_callback(line.rstrip('\n'))
-            process.stdout.close()
-            rc = process.wait()
-            if rc != 0: error_callback(f"Analysis failed for {base_name}")
+
+            if rc is None:
+                # stop_checker fired inside run_task
+                return False
+
+            if rc != 0:
+                failures.append((base_name, rc))
+
+        if failures:
+            error_callback(
+                f"DFHRTF analysis: {len(failures)}/{total_inputs} tasks failed "
+                f"— see inline blocks above and log: {log_path}"
+            )
+            for name, rc in failures:
+                error_callback(f"  - {name}  (exit {rc})")
 
         # 4. Post-Processing: Averaging (per output-folder group)
         # Default mode: one group per source folder -> per-folder average
@@ -316,7 +339,6 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             ext = f".{df_cfg.get('text_extension', 'txt')}"
             short_algo = {"Arithmetic Mean": "arithmean", "Geo-Arc-Length": "geoarc", "Soft-DTW": "softdtw"}.get(algo, "softdtw")
             avg_template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
-            avg_params = config.get('averaging', {})
 
             for out_dir, grp in groups.items():
                 if not grp['l']:
@@ -327,10 +349,11 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 log_callback(f"\n--- Post-Processing: {label} ({os.path.basename(out_dir) or out_dir}) ---")
                 os.makedirs(out_dir, exist_ok=True)
 
-                def get_avg_path(lr_val, _dir=out_dir, _tmpl=avg_template, _ext=ext, _algo=short_algo):
+                def get_avg_path(lr_val, _dir=out_dir, _tmpl=avg_template, _ext=ext, _algo=short_algo, _tilt=tilt_str):
                     fname = _tmpl.replace("{filename}", "dfhrtfs_avg")
                     fname = fname.replace("{folder}", os.path.basename(_dir))
                     fname = fname.replace("{samplerate}", "all")
+                    fname = fname.replace("{tilt}", _tilt)
                     fname = fname.replace("{LR}", lr_val)
                     fname = fname.replace("{algo}", _algo)
                     if not fname.endswith(_ext): fname += _ext

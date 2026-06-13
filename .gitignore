@@ -9,12 +9,12 @@ __pycache__/
 *cache*
 
 # --- User stuff ---
+logs/
 zz*
 zz*/
 plans/
 tests/
 *.sofa
-claude*
 
 # --- OS Specific ---
 .DS_Store

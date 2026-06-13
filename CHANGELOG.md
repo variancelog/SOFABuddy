@@ -1,7 +1,22 @@
-## Unreleased
+## v0.2.0 (2026-06-13)
 
-### In progress
-- Evaluation-grid (eval-grid) backend for DFHRTF analysis.
+### Added
+- Unified subprocess management (`core/subprocess_utils.py`) with real-time console logging and persistent diagnostics logs.
+- Advanced configuration schema (`core/default_settings.schema.json`) with automated generation script for developer ergonomics.
+- Support for `{tilt}` variable in filename templates across SOFA and DFHRTF exports.
+- Automated diagnostics logging: execution logs are now saved to a `logs/` directory relative to the output root.
+- Soft-DTW gamma controls are now split into per-SOFA (`softdtw_gamma_persofa`) and global (`softdtw_gamma_global`) settings for finer tuning.
+- `IDEA.md` for tracking roadmap and future feature brainstorms.
+
+### Changed
+- Refined default naming templates to be more concise (e.g., `s_` for SOFA, `t_` for text, `g_` for graphs).
+- Improved SOFA mastering to automatically ensure attribute units (SamplingRate, etc.) are lowercase, fixing compatibility with strict SOFA readers.
+- Migrated all internal task execution to use the new `run_task` utility for consistent error reporting.
+- Enhanced help text and tooltips in the DFHRTF tab to better explain template variables.
+
+### Fixed
+- Fixed SOFA unit casing issues that prevented saving mastered files from certain source datasets.
+- Improved exception handling and traceback reporting in CLI scripts to ensure errors are captured in logs even when piped.
 
 ## 2026-06-11
 
