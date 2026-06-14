@@ -170,30 +170,28 @@ class SofaBuddyMainWindow(QMainWindow):
         state = "🟢" if checked else "🔴"
         self.btn_nav_dfhrtf.setText(f"DFHRTF {state}")
 
-    def append_error(self, text):
+    def _append_colored(self, text, color):
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor(T.ERROR_TEXT))
-
+        fmt.setForeground(QColor(color))
         cursor = self.console.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.console.setTextCursor(cursor)
-
         self.console.setCurrentCharFormat(fmt)
         self.console.appendPlainText(text)
-
-        fmt.setForeground(QColor(T.FG))
+        fmt.setForeground(QColor(T.FG))   # reset so color never bleeds into next line
         self.console.setCurrentCharFormat(fmt)
+
+    def append_error(self, text):
+        self._append_colored(text, T.ERROR_TEXT)
 
     def append_log(self, text):
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(T.FG))
-
-        cursor = self.console.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self.console.setTextCursor(cursor)
-
-        self.console.setCurrentCharFormat(fmt)
-        self.console.appendPlainText(text)
+        s = text.lstrip()
+        if s.startswith("[Diagnostics log:"):
+            self._append_colored(text, T.OK_TEXT)       # status/info → yellow
+        elif "[+]" in text:
+            self._append_colored(text, T.SUCCESS_TEXT)  # success → blue
+        else:
+            self._append_colored(text, T.FG)            # normal → white
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -254,4 +252,7 @@ class SofaBuddyMainWindow(QMainWindow):
         if not success and self.worker and self.worker._is_stopped:
             self.append_log("Processing aborted.")
         else:
-            self.append_log("Processing completed." if success else "Processing failed.")
+            if success:
+                self._append_colored("Processing completed.", T.SUCCESS_TEXT)
+            else:
+                self.append_error("Processing failed.")

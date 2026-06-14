@@ -191,7 +191,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         total_inputs = len(resolved_inputs)
         log_root = custom_dir if not use_default else os.path.dirname(files[0])
         log_path = new_run_log("dfhrtf", log_root)
-        error_callback(f"[Diagnostics log: {log_path}]")
+        log_callback(f"[Diagnostics log: {log_path}]")
 
         failures = []  # list of (base_name, returncode)
 
@@ -227,10 +227,12 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             cmd.extend(["--stereo-angle",           str(float(dfhrtf_adv.get('stereo_angle_deg', 30.0)))])
             cmd.extend(["--lr-avg-gamma",           str(float(avg_params.get('softdtw_gamma_persofa', 0.01)))])
             cmd.extend(["--weighting-mode",         str(df_cfg.get('weighting_mode', 'Auto')).lower()])
-            cmd.extend(["--balance-weight-cv",      str(float(dfhrtf_adv.get('balance_weight_cv_threshold', 0.12)))])
+
             cmd.extend(["--grid-scale-mode",        str(dfhrtf_adv.get('weighted_grid_scale_mode', 'auto')).lower()])
             cmd.extend(["--grid-scale-low",         str(float(dfhrtf_adv.get('weighted_grid_scale_low', 0.001)))])
             cmd.extend(["--grid-scale-high",        str(float(dfhrtf_adv.get('weighted_grid_scale_high', 0.003)))])
+            if dfhrtf_adv.get('preserve_lr_balance', True):
+                cmd.append("--preserve-lr-balance")
 
             cmd.extend(["--delimiter", delim])
 

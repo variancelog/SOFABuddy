@@ -105,8 +105,7 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
                     dfhrtf_adv = df_cfg.get('advanced', {})
                     cmd.extend(["--weighting-mode",
                                  str(df_cfg.get('weighting_mode', 'Auto')).lower()])
-                    cmd.extend(["--balance-weight-cv",
-                                 str(float(dfhrtf_adv.get('balance_weight_cv_threshold', 0.12)))])
+
 
                     tasks.append({
                         'cmd': cmd,
@@ -121,7 +120,7 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
 
         log_root = custom_dir if not use_default else os.path.dirname(files[0])
         log_path = new_run_log("sofa", log_root)
-        error_callback(f"[Diagnostics log: {log_path}]")
+        log_callback(f"[Diagnostics log: {log_path}]")
 
         failures = []  # list of (desc, returncode)
 

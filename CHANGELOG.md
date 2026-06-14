@@ -1,3 +1,18 @@
+## v0.2.1 (2026-06-14)
+
+### Added
+- **ILD preservation** (`dfhrtf.advanced.preserve_lr_balance`, default `true`): L and R DFHRTF channels (both diffuse-field and ±30° stereo outputs) are now normalized using a single shared mean 1 kHz reference, preserving the real inter-aural level difference. Set to `false` to restore the legacy per-channel zeroing behavior.
+- Console color-coding: diagnostics log path lines appear in blue, `[+]` success lines in teal, "Processing completed." in teal. Added `OK_TEXT` and `SUCCESS_TEXT` constants to `ui/theme.py`.
+
+### Changed
+- **Improved auto weighting-mode**: replaced the CV-threshold heuristic with a provenance-free spherical-harmonic quadrature test (`_is_equal_weight_design` in `geometry_weights.py`). Genuine t/n-design grids (SH residual ~1e-11) now receive 1/N weights regardless of grid size or order; non-designs (residual ~1e0) always receive geometric weights. Eliminates false positives on high-order n-designs where the old CV was erratic (8–16% with no clean threshold).
+- Removed `balance_weight_cv_threshold` advanced setting and `--balance-weight-cv` CLI flag (superseded by the SH quadrature test).
+- Added scipy ≥ 1.15 compatibility shim for the renamed `sph_harm_y` API in `geometry_weights.py`.
+- Updated weighting-mode tooltip in the DFHRTF tab to describe the new SH quadrature test.
+
+### Fixed
+- Diagnostics log path messages were emitted via `error_callback` (red) in both SOFA and DFHRTF processors; now correctly use `log_callback`.
+
 ## v0.2.0 (2026-06-13)
 
 ### Added

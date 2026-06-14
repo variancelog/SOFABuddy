@@ -181,7 +181,6 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
         out_sofa.SourcePosition,
         advanced_dfeq=True,
         weighting_mode=args.weighting_mode,
-        balance_weight_cv=args.balance_weight_cv,
     )
     weights_expanded = weights[:, np.newaxis, np.newaxis]
     
@@ -378,9 +377,8 @@ def main():
     # Weighting (shared with generate_dfhrtf.py via dfhrtf config keys)
     parser.add_argument("--weighting-mode",      default="auto",
                         choices=["auto", "geometric", "uniform"],
-                        help="Grid weighting: auto (CV-snap), geometric, or uniform 1/N")
-    parser.add_argument("--balance-weight-cv",   type=float, default=0.12,
-                        help="Auto-mode CV threshold for snap-to-uniform (default 0.12)")
+                        help="Grid weighting: auto (design-test), geometric, or uniform 1/N")
+
 
     args = parser.parse_args()
 

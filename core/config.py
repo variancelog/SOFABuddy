@@ -99,10 +99,11 @@ SCHEMA: dict[str, dict] = {
     "dfhrtf.advanced.lf_blend_low_oct":      {"type": float, "min": 0.1, "max": 2.0},
     "dfhrtf.advanced.lf_blend_high_oct":     {"type": float, "min": 0.1, "max": 2.0},
     "dfhrtf.advanced.stereo_angle_deg":      {"type": float, "min": 0.0, "max": 90.0},
-    "dfhrtf.advanced.balance_weight_cv_threshold": {"type": float, "min": 0.0, "max": 1.0},
+
     "dfhrtf.advanced.weighted_grid_scale_mode":    {"type": str, "choices": ["auto", "manual"]},
     "dfhrtf.advanced.weighted_grid_scale_low":     {"type": float, "min": 0.0, "max": 1.0},
     "dfhrtf.advanced.weighted_grid_scale_high":    {"type": float, "min": 0.0, "max": 1.0},
+    "dfhrtf.advanced.preserve_lr_balance":         {"type": bool},
 
     # -- averaging --
     "averaging.num_points":            {"type": int, "min": 64, "max": 4096},

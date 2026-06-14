@@ -606,8 +606,8 @@ class DfhrtfTab(QWidget):
         self.dd_weighting_mode = FlameDropdown("Grid Weighting")
         self.dd_weighting_mode.setToolTip(
             "<p><b>Auto</b>: uses geometric (solid-angle area) weights for irregular or "
-            "hemispherical grids; automatically switches to uniform 1/N for balanced grids "
-            "such as spherical t-designs (detected when geometric-weight CV &lt; 12%).<br>"
+            "hemispherical grids; automatically switches to uniform 1/N when the grid is a "
+            "genuine spherical t/n-design (verified by a spherical-harmonic quadrature test).<br>"
             "<b>Geometric</b>: always use ConvexHull solid-angle weights.<br>"
             "<b>Uniform</b>: always use equal 1/N weights.</p>"
         )

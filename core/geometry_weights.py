@@ -9,6 +9,17 @@ those scripts already import.
 import numpy as np
 from scipy.spatial import ConvexHull
 
+try:  # scipy >= 1.15 renamed sph_harm -> sph_harm_y (new arg order: l, m, colat, az)
+    from scipy.special import sph_harm_y as _sph_harm_y
+
+    def _sh_complex(l, m, col, az):
+        return _sph_harm_y(l, abs(m), col, az)
+except ImportError:  # older scipy: sph_harm(m, l, azimuth, colat)
+    from scipy.special import sph_harm as _sph_harm_old
+
+    def _sh_complex(l, m, col, az):
+        return _sph_harm_old(abs(m), l, az, col)
+
 
 def spherical_to_cartesian(r, az, el):
     """Convert spherical (r, az, el) in degrees to Cartesian (x, y, z)."""
@@ -28,8 +39,48 @@ def get_dominant_radius(source_pos):
     return values[np.argmax(counts)]
 
 
+def _is_equal_weight_design(cart_coords, tol=1e-6):
+    """Return True iff the points form a genuine spherical t/n-design.
+
+    A spherical design's defining property is that EQUAL (1/N) weighting
+    integrates every spherical harmonic up to its design degree exactly.  We
+    test that property directly: for a real design the worst residual is ~1e-11,
+    while measured/weighted grids (equiangular, Gauss, hemispherical, Lebedev)
+    sit at ~1e0 — a clean ~9-order-of-magnitude gap with no overlap, so the
+    1e-6 tolerance never produces a borderline call.
+
+    This is provenance-free (no metadata or filename trust required) and
+    replaces the old geo-weight-CV heuristic, whose CV for real designs is
+    erratic (≈8–16 %) with no threshold that cleanly separates them from
+    non-uniform grids.
+
+    The test degree must be ≤ the grid's design degree, and a grid needs at
+    least (deg+1)**2 points to be a candidate, so we drop from degree 8 (needs
+    ≥81 pts) to 6 (needs ≥49 pts) for small grids such as LISTEN (187 nodes is
+    still comfortably above 81, but tiny custom grids are handled gracefully).
+    """
+    N = len(cart_coords)
+    test_order = 8 if N >= 100 else 6
+    x, y, z = cart_coords[:, 0], cart_coords[:, 1], cart_coords[:, 2]
+    r = np.linalg.norm(cart_coords, axis=1)
+    az = np.arctan2(y, x)
+    col = np.arccos(np.clip(z / r, -1, 1))
+    for l in range(1, test_order + 1):
+        for m in range(-l, l + 1):
+            Y = _sh_complex(l, m, col, az)
+            if m < 0:
+                Yr = np.sqrt(2) * (-1) ** m * Y.imag
+            elif m > 0:
+                Yr = np.sqrt(2) * (-1) ** m * Y.real
+            else:
+                Yr = Y.real
+            if abs(4 * np.pi / N * np.sum(Yr)) > tol:
+                return False
+    return True
+
+
 def calculate_geometric_weights(source_pos, advanced_dfeq=True,
-                                weighting_mode='auto', balance_weight_cv=0.12):
+                                weighting_mode='auto'):
     """Calculate solid-angle weights for spherical diffuse-field integration.
 
     Parameters
@@ -43,13 +94,12 @@ def calculate_geometric_weights(source_pos, advanced_dfeq=True,
         known to be clean.
     weighting_mode : {'auto', 'geometric', 'uniform'}
         'auto'      — compute ghost-node ConvexHull weights, then snap to
-                      uniform 1/N if their CV is below *balance_weight_cv*
-                      (correct behaviour for balanced grids such as spherical
-                      t-designs).
+                      uniform 1/N if the grid passes a spherical-design
+                      quadrature test (integrates every SH up to degree 8 with
+                      equal weights to machine precision).  Correct for genuine
+                      t/n-designs; non-designs always receive geometric weights.
         'geometric' — always use ghost-node ConvexHull solid-angle weights.
         'uniform'   — always return equal 1/N weights (bypass ConvexHull).
-    balance_weight_cv : float
-        CV threshold for the auto mode snap-to-uniform decision (default 0.12).
 
     Returns
     -------
@@ -139,15 +189,15 @@ def calculate_geometric_weights(source_pos, advanced_dfeq=True,
     if mode == 'geometric':
         return weights
 
-    # ── Auto: snap to uniform when the grid is already well-balanced ─────────
-    # If the computed geometric weights have low variance the grid is nearly
-    # uniform (e.g. a spherical t-design) and 1/N is both more accurate and
-    # more stable than a hull estimate.
-    wa = weights[weights > 0]
-    cv = float(wa.std() / wa.mean()) if len(wa) > 0 and wa.mean() > 0 else 1.0
-    if cv < balance_weight_cv:
-        print(f"   [Weighting] Auto -> uniform  "
-              f"(geo-weight CV={cv * 100:.1f}% < threshold {balance_weight_cv * 100:.0f}%)")
+    # ── Auto: uniform iff the grid is a genuine spherical design ─────────────
+    # A t/n-design's defining property is that EQUAL weights integrate every SH
+    # up to its degree exactly; for such grids 1/N is exact and the hull weights
+    # computed above only add error.  We test that property directly — it is
+    # provenance-free and, unlike the old geo-weight-CV heuristic, has no
+    # threshold overlap between designs (~1e-11) and measured grids (~1e0).
+    if _is_equal_weight_design(cart_coords):
+        print("   [Weighting] Auto -> uniform  "
+              "(grid passes spherical-design quadrature test)")
         return _uniform_weights()
-    print(f"   [Weighting] Auto -> geometric (geo-weight CV={cv * 100:.1f}%)")
+    print("   [Weighting] Auto -> geometric (not an equal-weight design)")
     return weights

@@ -54,10 +54,11 @@
       "lf_blend_low_oct": 0.50,
       "lf_blend_high_oct": 1.0,
       "stereo_angle_deg": 30.0,
-      "balance_weight_cv_threshold": 0.12,
+
       "weighted_grid_scale_mode": "manual",
       "weighted_grid_scale_low": 0.0001,
-      "weighted_grid_scale_high": 0.0025
+      "weighted_grid_scale_high": 0.0025,
+      "preserve_lr_balance": true
     }
   },
   "averaging": {

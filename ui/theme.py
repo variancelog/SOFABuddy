@@ -32,6 +32,8 @@ DISABLED_SEL_BG   = "#404952"   # disabled selected-by-default control
 
 # --- Error text (console + append_error) ---
 ERROR_TEXT = "#E06666"
+OK_TEXT = "#5aacdb"
+SUCCESS_TEXT = "#5cdbb9"
 
 # --- Sizing ---
 CONTROL_HEIGHT = 40   # px; shared row height for all interactive controls

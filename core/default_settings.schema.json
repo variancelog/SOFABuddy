@@ -298,11 +298,7 @@
               "maximum": 90.0,
               "description": "Azimuth angle (degrees) used when extracting L/R off-axis curves for stereo graph outputs."
             },
-            "balance_weight_cv_threshold": {
-              "type": "number",
-              "minimum": 0.0,
-              "maximum": 1.0
-            },
+
             "weighted_grid_scale_mode": {
               "enum": [
                 "auto",
@@ -318,6 +314,9 @@
               "type": "number",
               "minimum": 0.0,
               "maximum": 1.0
+            },
+            "preserve_lr_balance": {
+              "type": "boolean"
             }
           },
           "description": "Advanced DFHRTF extraction tunables. Not surfaced in the UI \u2014 edit this file directly."

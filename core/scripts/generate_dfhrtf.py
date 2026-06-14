@@ -180,8 +180,7 @@ def main():
     parser.add_argument("--advanced-dfeq", action="store_true", default=True, help="Use advanced data sanitization")
     parser.add_argument("--weighting-mode", default="auto", choices=["auto", "geometric", "uniform"],
                         help="Grid weighting mode: auto (detect balanced grids), geometric, or uniform 1/N")
-    parser.add_argument("--balance-weight-cv", type=float, default=0.12,
-                        help="Auto-mode CV threshold: geo-weight CV below this snaps to uniform weights (default 0.12)")
+
     parser.add_argument("--grid-scale-mode", default="auto", choices=["auto", "manual"],
                         help="Weighted-grid color range: auto (1st-99th pct) or manual fixed low/high")
     parser.add_argument("--grid-scale-low",  type=float, default=0.001,
@@ -189,6 +188,9 @@ def main():
     parser.add_argument("--grid-scale-high", type=float, default=0.003,
                         help="Manual color-range maximum (default 0.003)")
     parser.add_argument("--only_plot", action="store_true", help="Generate only the plot, no text/CSV files")
+    parser.add_argument("--preserve-lr-balance", action="store_true",
+                        help="Normalize L and R with a single shared 1 kHz reference "
+                             "(mean of L/R) to preserve the real inter-aural level offset")
     
     args = parser.parse_args()
 
@@ -213,7 +215,6 @@ def main():
         sofa.SourcePosition,
         advanced_dfeq=args.advanced_dfeq,
         weighting_mode=args.weighting_mode,
-        balance_weight_cv=args.balance_weight_cv,
     )
 
     # FFT (Measurements, Receivers, Freqs)
@@ -240,9 +241,16 @@ def main():
     val_r = np.interp(target_freqs, fft_freqs, smoothed_r)
 
     # 4. Normalize (0 dB at norm_freq_hz)
+    # preserve_lr_balance: use a single shared mean reference so the real
+    # inter-aural level difference (ILD) is preserved across L and R.
     idx_norm = (np.abs(target_freqs - norm_freq_hz)).argmin()
-    val_l -= val_l[idx_norm]
-    val_r -= val_r[idx_norm]
+    if args.preserve_lr_balance:
+        ref = (val_l[idx_norm] + val_r[idx_norm]) / 2.0   # shared → preserves ILD
+        val_l -= ref
+        val_r -= ref
+    else:
+        val_l -= val_l[idx_norm]
+        val_r -= val_r[idx_norm]
 
     # 4.5 LF Extension
     if args.lf_ext_dfhrtf:
@@ -333,13 +341,20 @@ def main():
         mag_30L = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30L, 0, :], n=n_fft)) + 1e-12)
         smooth_30L = apply_smoothing(fft_freqs, mag_30L, fraction=args.smoothing)
         val_30L = np.interp(target_freqs, fft_freqs, smooth_30L)
-        val_30L -= val_30L[idx_norm]
 
         # Process R Ear
         mag_30R = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30R, 1, :], n=n_fft)) + 1e-12)
         smooth_30R = apply_smoothing(fft_freqs, mag_30R, fraction=args.smoothing)
         val_30R = np.interp(target_freqs, fft_freqs, smooth_30R)
-        val_30R -= val_30R[idx_norm]
+
+        # Normalize — shared reference preserves the stereo pair's ILD
+        if args.preserve_lr_balance:
+            ref_s = (val_30L[idx_norm] + val_30R[idx_norm]) / 2.0
+            val_30L -= ref_s
+            val_30R -= ref_s
+        else:
+            val_30L -= val_30L[idx_norm]
+            val_30R -= val_30R[idx_norm]
 
         # Apply LF extension and tilt identically
         if args.lf_ext_dfhrtf:
