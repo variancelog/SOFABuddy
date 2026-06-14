@@ -226,6 +226,11 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             cmd.extend(["--lf-blend-high-oct",     str(float(dfhrtf_adv.get('lf_blend_high_oct', 1.0)))])
             cmd.extend(["--stereo-angle",           str(float(dfhrtf_adv.get('stereo_angle_deg', 30.0)))])
             cmd.extend(["--lr-avg-gamma",           str(float(avg_params.get('softdtw_gamma_persofa', 0.01)))])
+            cmd.extend(["--weighting-mode",         str(df_cfg.get('weighting_mode', 'Auto')).lower()])
+            cmd.extend(["--balance-weight-cv",      str(float(dfhrtf_adv.get('balance_weight_cv_threshold', 0.12)))])
+            cmd.extend(["--grid-scale-mode",        str(dfhrtf_adv.get('weighted_grid_scale_mode', 'auto')).lower()])
+            cmd.extend(["--grid-scale-low",         str(float(dfhrtf_adv.get('weighted_grid_scale_low', 0.001)))])
+            cmd.extend(["--grid-scale-high",        str(float(dfhrtf_adv.get('weighted_grid_scale_high', 0.003)))])
 
             cmd.extend(["--delimiter", delim])
 
@@ -264,24 +269,6 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 gname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{tilt}", tilt_str).replace("{graphtype}", "df")
                 if not gname.endswith(graph_ext): gname += graph_ext
                 cmd.extend(["--graph-out", os.path.join(output_root, gname)])
-
-            if df_cfg.get('stereo_graphs'):
-                graph_template = df_cfg.get('graph_filename', "{filename}")
-                graph_ext = f".{df_cfg.get('graph_extension', 'png')}"
-
-                sname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{tilt}", tilt_str).replace("{graphtype}", "stereo")
-
-                # Fallback: If {graphtype} wasn't used in the template, append '_stereo' manually
-                # so stereo graphs don't overwrite DF graphs.
-                if "{graphtype}" not in graph_template:
-                    if sname.endswith(graph_ext):
-                        sname = sname[:-len(graph_ext)] + "_stereo" + graph_ext
-                    else:
-                        sname += "_stereo" + graph_ext
-                else:
-                    if not sname.endswith(graph_ext): sname += graph_ext
-
-                cmd.extend(["--graph-stereo-out", os.path.join(output_root, sname)])
 
             if df_cfg.get('weighted_grid'):
                 graph_template = df_cfg.get('graph_filename', "{filename}")

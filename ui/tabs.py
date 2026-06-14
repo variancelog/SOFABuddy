@@ -602,8 +602,16 @@ class DfhrtfTab(QWidget):
         self.btn_dfhrtf_graphs = FlameToggleButton("DFHRTF Graphs")
         self.btn_dfhrtf_graphs.setToolTip("<p>Enables diffuse field HRTF graph outputs. Left and right ears overlayed on one graph.</p>")
         self.btn_dfhrtf_graphs.setChecked(True)
-        self.btn_stereo_graphs = FlameToggleButton("Stereo Graphs")
-        self.btn_stereo_graphs.setToolTip("<p>Enables +30/-30 (stereo) graphs outputs. Left ear's left channel HRTF and right ear's right channel HRTF overlayed on one graph.</p>")
+
+        self.dd_weighting_mode = FlameDropdown("Grid Weighting")
+        self.dd_weighting_mode.setToolTip(
+            "<p><b>Auto</b>: uses geometric (solid-angle area) weights for irregular or "
+            "hemispherical grids; automatically switches to uniform 1/N for balanced grids "
+            "such as spherical t-designs (detected when geometric-weight CV &lt; 12%).<br>"
+            "<b>Geometric</b>: always use ConvexHull solid-angle weights.<br>"
+            "<b>Uniform</b>: always use equal 1/N weights.</p>"
+        )
+        self.dd_weighting_mode.addItems(["Auto", "Geometric", "Uniform"])
 
         self.btn_weighted_grid = FlameToggleButton("Weighted Grid")
         self.btn_weighted_grid.setToolTip(
@@ -653,7 +661,7 @@ class DfhrtfTab(QWidget):
         self.btn_exclude_outliers.setChecked(True)
 
         # --- Connections for Dependency State ---
-        for toggle in [self.btn_per_sofa_lr, self.btn_per_sofa_avg, self.btn_dfhrtf_graphs, self.btn_stereo_graphs, self.btn_weighted_grid, self.btn_extend_lf, self.btn_avg_all]:
+        for toggle in [self.btn_per_sofa_lr, self.btn_per_sofa_avg, self.btn_dfhrtf_graphs, self.btn_weighted_grid, self.btn_extend_lf, self.btn_avg_all]:
             toggle.toggled.connect(self._update_dependencies)
 
         # --- Layout Mapping ---
@@ -673,7 +681,7 @@ class DfhrtfTab(QWidget):
         grid.addWidget(FlameLabel("Graph Outputs:"), 2, 0)
         row2 = QHBoxLayout()
         row2.addWidget(self.btn_dfhrtf_graphs)
-        row2.addWidget(self.btn_stereo_graphs)
+        row2.addWidget(self.dd_weighting_mode)
         row2.addWidget(self.btn_weighted_grid)
         row2.addWidget(self.dd_weighted_scope)
         grid.addLayout(row2, 2, 1)
@@ -713,8 +721,7 @@ class DfhrtfTab(QWidget):
 
     def _update_dependencies(self):
         any_text = self.btn_per_sofa_lr.isChecked() or self.btn_per_sofa_avg.isChecked()
-        any_graph = (self.btn_dfhrtf_graphs.isChecked() or self.btn_stereo_graphs.isChecked()
-                     or self.btn_weighted_grid.isChecked())
+        any_graph = self.btn_dfhrtf_graphs.isChecked() or self.btn_weighted_grid.isChecked()
         any_output = any_text or any_graph
 
         # Text Output Config
@@ -728,6 +735,7 @@ class DfhrtfTab(QWidget):
         self.dd_weighted_scope.setEnabled(self.btn_weighted_grid.isChecked())
 
         # Refinement & Post Processing
+        self.dd_weighting_mode.setEnabled(any_output)
         self.slider_smoothing.setEnabled(any_output)
         self.slider_tilt.setEnabled(any_output)
         self.btn_extend_lf.setEnabled(any_output)
@@ -748,7 +756,7 @@ class DfhrtfTab(QWidget):
             'text_delimiter': self.dd_delimiter.get_value(),
             'text_extension': self.dd_text_ext.get_value(),
             'dfhrtf_graphs': self.btn_dfhrtf_graphs.get_value(),
-            'stereo_graphs': self.btn_stereo_graphs.get_value(),
+            'weighting_mode': self.dd_weighting_mode.get_value(),
             'weighted_grid': self.btn_weighted_grid.get_value(),
             'weighted_grid_scope': self.dd_weighted_scope.get_value(),
             'graph_filename': self.edit_graph_filename.text(),
@@ -772,7 +780,7 @@ class DfhrtfTab(QWidget):
         self.dd_text_ext.set_value(cfg.get('text_extension', 'txt'))
 
         self.btn_dfhrtf_graphs.set_value(bool(cfg.get('dfhrtf_graphs', True)))
-        self.btn_stereo_graphs.set_value(bool(cfg.get('stereo_graphs', False)))
+        self.dd_weighting_mode.set_value(cfg.get('weighting_mode', 'Auto'))
         self.btn_weighted_grid.set_value(bool(cfg.get('weighted_grid', False)))
         self.dd_weighted_scope.set_value(cfg.get('weighted_grid_scope', 'Per Folder'))
         self.edit_graph_filename.setText(cfg.get('graph_filename', 'graph_{filename}_{graphtype}'))

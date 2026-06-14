@@ -4,118 +4,31 @@ import sys
 import numpy as np
 import sofar as sf
 import scipy.fft as fft
-from scipy.spatial import ConvexHull
 import matplotlib.pyplot as plt
 import csv
 import re
 
-""" Note: To learn more about how this script computes Diffuse Field HRTF 
-    (DFHRTF) from the SOFA files, please read `readme_dfhrtf_calculation.md 
+# Bootstrap project root onto sys.path so core.* imports work when this script
+# is launched as a subprocess (no cwd / PYTHONPATH guarantees from the caller).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+from core.geometry_weights import (  # noqa: E402
+    spherical_to_cartesian,
+    get_dominant_radius,
+    calculate_geometric_weights,
+)
+
+""" Note: To learn more about how this script computes Diffuse Field HRTF
+    (DFHRTF) from the SOFA files, please read `readme_dfhrtf_calculation.md
     in the repo """
+
+# Marker area (pts²) for the weighted-grid plot.  Size is constant so that
+# comparisons across files differ only in color, not marker footprint.
+WEIGHTED_GRID_NODE_SIZE = 20
 
 
 # ================= HELPER FUNCTIONS =================
 
-def spherical_to_cartesian(r, az, el):
-    az_rad = np.radians(az)
-    el_rad = np.radians(el)
-    x = r * np.cos(el_rad) * np.cos(az_rad)
-    y = r * np.cos(el_rad) * np.sin(az_rad)
-    z = r * np.sin(el_rad)
-    return np.column_stack((x, y, z))
 
-def calculate_geometric_weights(source_pos, advanced_dfeq=True):
-    """Calculates solid angle weights for spherical integration."""
-    az = source_pos[:, 0]
-    el = source_pos[:, 1]
-    
-    if advanced_dfeq:
-        r = source_pos[:, 2]
-        # Find dominant radius
-        radii_rounded = np.round(r, decimals=3)
-        values, counts = np.unique(radii_rounded, return_counts=True)
-        dominant_r = values[np.argmax(counts)]
-        
-        # Filter coordinates deviating from dominant radius
-        valid_idx = np.abs(r - dominant_r) < 0.05
-        
-        # Identify and remove duplicate angular coordinates
-        az_el_rounded = np.round(source_pos[valid_idx][:, 0:2], decimals=3)
-        _, unique_idx = np.unique(az_el_rounded, axis=0, return_index=True)
-        
-        final_idx = np.where(valid_idx)[0][unique_idx]
-        
-        az_clean = az[final_idx]
-        el_clean = el[final_idx]
-        cart_coords = spherical_to_cartesian(1.0, az_clean, el_clean)
-    else:
-        cart_coords = spherical_to_cartesian(1.0, az, el)
-        final_idx = np.arange(len(source_pos))
-    ### Original Version - Problematic with open sphere grids like ARI 
-    """
-    try:
-        hull = ConvexHull(cart_coords)
-        weights = np.zeros(len(source_pos))
-        temp_weights = np.zeros(len(cart_coords))
-        for simplex in hull.simplices:
-            A, B, C = cart_coords[simplex]
-            cross_prod = np.cross(B - A, C - A)
-            area = 0.5 * np.linalg.norm(cross_prod)
-            temp_weights[simplex] += area / 3.0
-            
-        weights[final_idx] = temp_weights
-        weights /= np.sum(weights)
-    except:
-        weights = np.ones(len(source_pos)) / len(source_pos)
-
-    return weights
-    """
-    
-    ### New Version - Accounts for open spheres with "ghost node" at south pole
-    
-    try:
-        # 1. Generate a dense, uniform grid of dummy points (Fibonacci sphere)
-        samples = 1000
-        indices = np.arange(0, samples, dtype=float) + 0.5
-        phi = np.arccos(1 - 2 * indices / samples)
-        theta = np.pi * (1 + 5**0.5) * indices
-        
-        gx = np.cos(theta) * np.sin(phi)
-        gy = np.sin(theta) * np.sin(phi)
-        gz = np.cos(phi)
-        ghost_coords = np.column_stack((gx, gy, gz))
-        
-        # 2. Keep only the ghost points that fall below the actual dataset's lowest point
-        # We subtract a tiny offset (0.01) so they don't exactly overlap the real edge
-        min_z = np.min(cart_coords[:, 2])
-        ghost_coords = ghost_coords[ghost_coords[:, 2] < (min_z - 0.01)]
-        
-        # 3. Combine real coordinates with the ghost coordinates
-        cart_coords_closed = np.vstack((cart_coords, ghost_coords))
-        
-        hull = ConvexHull(cart_coords_closed)
-        weights = np.zeros(len(source_pos))
-        temp_weights = np.zeros(len(cart_coords_closed))
-        
-        for simplex in hull.simplices:
-            A, B, C = cart_coords_closed[simplex]
-            cross_prod = np.cross(B - A, C - A)
-            area = 0.5 * np.linalg.norm(cross_prod)
-            temp_weights[simplex] += area / 3.0
-            
-        # 4. Strip off ALL the ghost node weights (keep only the original nodes)
-        real_weights = temp_weights[:len(cart_coords)]
-        
-        # 5. Assign back to the final indices and normalize
-        weights[final_idx] = real_weights
-        weights /= np.sum(weights)
-        # ---------------------------------
-    except Exception as e:
-        print(f"[Warning] Weight calculation fallback used: {e}")
-        weights = np.ones(len(source_pos)) / len(source_pos)
-
-    return weights
-    
 
 def find_closest_grid_point(source_pos, target_az, target_el):
     """Finds index of closest grid point using Cartesian Euclidean distance."""
@@ -265,6 +178,16 @@ def main():
     parser.add_argument("--squigify", action="store_true", help="Enable Squiglink optimized DFHRTF outputs")
     parser.add_argument("--sim_meas", action="store_true", help="Tag output as Simulated instead of Measured")
     parser.add_argument("--advanced-dfeq", action="store_true", default=True, help="Use advanced data sanitization")
+    parser.add_argument("--weighting-mode", default="auto", choices=["auto", "geometric", "uniform"],
+                        help="Grid weighting mode: auto (detect balanced grids), geometric, or uniform 1/N")
+    parser.add_argument("--balance-weight-cv", type=float, default=0.12,
+                        help="Auto-mode CV threshold: geo-weight CV below this snaps to uniform weights (default 0.12)")
+    parser.add_argument("--grid-scale-mode", default="auto", choices=["auto", "manual"],
+                        help="Weighted-grid color range: auto (1st-99th pct) or manual fixed low/high")
+    parser.add_argument("--grid-scale-low",  type=float, default=0.001,
+                        help="Manual color-range minimum (default 0.001)")
+    parser.add_argument("--grid-scale-high", type=float, default=0.003,
+                        help="Manual color-range maximum (default 0.003)")
     parser.add_argument("--only_plot", action="store_true", help="Generate only the plot, no text/CSV files")
     
     args = parser.parse_args()
@@ -286,7 +209,12 @@ def main():
     stereo_angle     = args.stereo_angle
 
     # 2. Compute Diffuse Field Response
-    weights = calculate_geometric_weights(sofa.SourcePosition, advanced_dfeq=args.advanced_dfeq)
+    weights = calculate_geometric_weights(
+        sofa.SourcePosition,
+        advanced_dfeq=args.advanced_dfeq,
+        weighting_mode=args.weighting_mode,
+        balance_weight_cv=args.balance_weight_cv,
+    )
 
     # FFT (Measurements, Receivers, Freqs)
     fft_data = np.fft.rfft(hrirs, n=n_fft, axis=2)
@@ -449,7 +377,7 @@ def main():
         print(f"   [+] Saved Stereo Plot: {os.path.basename(args.graph_stereo_out)}")
         plt.close()
 
-    # 7.6 Weighted Grid Plot (cleaned point set, markers sized/colored by solid-angle weight)
+    # 7.6 Weighted Grid Plot (cleaned point set, color encodes solid-angle weight)
     if args.graph_weighted_out:
         print("   -> Plotting Weighted Grid...")
         src = sofa.SourcePosition
@@ -458,18 +386,19 @@ def main():
         mask = weights > 0                      # surviving (cleaned) points only
         w = weights[mask]
         cart_clean = cart[mask]
-        sizes = 6 + (w / w.max()) * 80         # scale marker area 6..86 by weight
 
-        # Clip color range to 1st–99th percentile so the bulk of the distribution
-        # spans the full colormap instead of being crushed at the low end by pole outliers
-        vmin = np.percentile(w, 1)
-        vmax = np.percentile(w, 99)
+        # Color range: manual fixed bounds or auto 1st–99th percentile
+        if args.grid_scale_mode == "manual":
+            vmin, vmax = args.grid_scale_low, args.grid_scale_high
+        else:
+            vmin = np.percentile(w, 1)
+            vmax = np.percentile(w, 99)
 
         fig = plt.figure(figsize=(8, 8))
         ax = fig.add_subplot(111, projection='3d')
         sc = ax.scatter(
             cart_clean[:, 0], cart_clean[:, 1], cart_clean[:, 2],
-            c=w, s=sizes, cmap='viridis', alpha=0.85, vmin=vmin, vmax=vmax
+            c=w, s=WEIGHTED_GRID_NODE_SIZE, cmap='viridis', alpha=0.85, vmin=vmin, vmax=vmax
         )
         plt.colorbar(sc, ax=ax, label='Solid-angle weight', shrink=0.6, pad=0.1)
         ax.set_title(f"Weighted grid — {int(mask.sum())} nodes")

@@ -98,6 +98,16 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
                     cmd.extend(["--blend-high-oct",
                                  str(float(sofa_adv.get('blend_high_oct', 0.75)))])
 
+                    # Weighting: driven by dfhrtf config keys so one setting
+                    # governs weighting in both the SOFA mastering and DFHRTF
+                    # analysis stages.
+                    df_cfg = config.get('dfhrtf', {})
+                    dfhrtf_adv = df_cfg.get('advanced', {})
+                    cmd.extend(["--weighting-mode",
+                                 str(df_cfg.get('weighting_mode', 'Auto')).lower()])
+                    cmd.extend(["--balance-weight-cv",
+                                 str(float(dfhrtf_adv.get('balance_weight_cv_threshold', 0.12)))])
+
                     tasks.append({
                         'cmd': cmd,
                         'desc': f"{base_name} ({sr}Hz, {eq_label})",

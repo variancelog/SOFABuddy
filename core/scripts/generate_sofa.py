@@ -6,7 +6,15 @@ import numpy as np
 import sofar as sf
 import scipy.signal as signal
 import scipy.fft as fft
-from scipy.spatial import ConvexHull
+
+# Bootstrap project root onto sys.path so core.* imports work when this script
+# is launched as a subprocess (no cwd / PYTHONPATH guarantees from the caller).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+from core.geometry_weights import (  # noqa: E402
+    spherical_to_cartesian,
+    get_dominant_radius,
+    calculate_geometric_weights,
+)
 
 # ================= R2 CONFIGURATION =================
 PROCESSING_LENGTH = 2048
@@ -53,54 +61,6 @@ def find_sofas_in_project(project_path):
         sys.exit(1)
     
     return [os.path.join(out_dir, c) for c in candidates if "HRIR" in c]
-
-def get_dominant_radius(source_pos):
-    r = source_pos[:, 2]
-    radii_rounded = np.round(r, decimals=3)
-    values, counts = np.unique(radii_rounded, return_counts=True)
-    return values[np.argmax(counts)]
-
-def spherical_to_cartesian(r, az, el):
-    az_rad = np.radians(az)
-    el_rad = np.radians(el)
-    x = r * np.cos(el_rad) * np.cos(az_rad)
-    y = r * np.cos(el_rad) * np.sin(az_rad)
-    z = r * np.sin(el_rad)
-    return np.column_stack((x, y, z))
-
-def calculate_geometric_weights(source_pos):
-    print("      Calculating geometric weights...", end="", flush=True)
-    az = source_pos[:, 0]
-    el = source_pos[:, 1]
-    
-    dominant_r = get_dominant_radius(source_pos)
-    valid_idx = np.abs(source_pos[:, 2] - dominant_r) < 0.05
-    
-    az_el_rounded = np.round(source_pos[valid_idx][:, 0:2], decimals=3)
-    _, unique_idx = np.unique(az_el_rounded, axis=0, return_index=True)
-    
-    final_idx = np.where(valid_idx)[0][unique_idx]
-    az_clean = az[final_idx]
-    el_clean = el[final_idx]
-    cart_coords = spherical_to_cartesian(1.0, az_clean, el_clean)
-        
-    try:
-        hull = ConvexHull(cart_coords)
-        weights = np.zeros(len(source_pos))
-        temp_weights = np.zeros(len(cart_coords))
-        for simplex in hull.simplices:
-            A, B, C = cart_coords[simplex]
-            cross_prod = np.cross(B - A, C - A)
-            area = 0.5 * np.linalg.norm(cross_prod)
-            temp_weights[simplex] += area / 3.0
-        
-        weights[final_idx] = temp_weights
-        weights /= np.sum(weights)
-        print(" Done.")
-        return weights
-    except:
-        print(" Failed (Fallback to uniform).")
-        return np.ones(len(source_pos)) / len(source_pos)
 
 def find_global_onset(hrirs, threshold_ratio):
     """Finds the absolute first sample where energy crosses the threshold."""
@@ -217,7 +177,12 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     freqs = fft.rfftfreq(N, 1.0 / target_fs)
 
     # 5. Calculate Global Diffuse Field Response (Raw)
-    weights = calculate_geometric_weights(out_sofa.SourcePosition)
+    weights = calculate_geometric_weights(
+        out_sofa.SourcePosition,
+        advanced_dfeq=True,
+        weighting_mode=args.weighting_mode,
+        balance_weight_cv=args.balance_weight_cv,
+    )
     weights_expanded = weights[:, np.newaxis, np.newaxis]
     
     P_raw = np.abs(H_raw)**2
@@ -409,6 +374,13 @@ def main():
                         help="Octaves below crossover for crossfade start")
     parser.add_argument("--blend-high-oct",      type=float, default=0.75,
                         help="Octaves above crossover for crossfade end")
+
+    # Weighting (shared with generate_dfhrtf.py via dfhrtf config keys)
+    parser.add_argument("--weighting-mode",      default="auto",
+                        choices=["auto", "geometric", "uniform"],
+                        help="Grid weighting: auto (CV-snap), geometric, or uniform 1/N")
+    parser.add_argument("--balance-weight-cv",   type=float, default=0.12,
+                        help="Auto-mode CV threshold for snap-to-uniform (default 0.12)")
 
     args = parser.parse_args()
 

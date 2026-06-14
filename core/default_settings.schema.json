@@ -187,9 +187,12 @@
           "type": "boolean",
           "description": "Generate a DFHRTF magnitude plot for each processed SOFA file."
         },
-        "stereo_graphs": {
-          "type": "boolean",
-          "description": "Generate \u00b1stereo_angle_deg comparison graphs showing the L and R off-axis curves alongside the DFHRTF."
+        "weighting_mode": {
+          "enum": [
+            "Auto",
+            "Geometric",
+            "Uniform"
+          ]
         },
         "weighted_grid": {
           "type": "boolean",
@@ -294,6 +297,27 @@
               "minimum": 0.0,
               "maximum": 90.0,
               "description": "Azimuth angle (degrees) used when extracting L/R off-axis curves for stereo graph outputs."
+            },
+            "balance_weight_cv_threshold": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "weighted_grid_scale_mode": {
+              "enum": [
+                "auto",
+                "manual"
+              ]
+            },
+            "weighted_grid_scale_low": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "weighted_grid_scale_high": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
             }
           },
           "description": "Advanced DFHRTF extraction tunables. Not surfaced in the UI \u2014 edit this file directly."
