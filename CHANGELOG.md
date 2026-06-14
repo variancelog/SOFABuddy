@@ -13,6 +13,7 @@
 - Improved SOFA mastering to automatically ensure attribute units (SamplingRate, etc.) are lowercase, fixing compatibility with strict SOFA readers.
 - Migrated all internal task execution to use the new `run_task` utility for consistent error reporting.
 - Enhanced help text and tooltips in the DFHRTF tab to better explain template variables.
+- Improved weighting algorithm for diffuse field calculation: process now correctly weights sliced-off grids (e.g. measurement grids missing lower elevations)
 
 ### Fixed
 - Fixed SOFA unit casing issues that prevented saving mastered files from certain source datasets.

@@ -35,7 +35,7 @@
     "text_delimiter": "Tab",
     "text_extension": "txt",
     "dfhrtf_graphs": true,
-    "stereo_graphs": false,
+    "weighting_mode": "Auto",
     "weighted_grid": true,
     "weighted_grid_scope": "Per Folder",
     "graph_filename": "g_{folder}_{filename}_{graphtype}_LR",
@@ -53,7 +53,11 @@
       "norm_freq_hz": 1000.0,
       "lf_blend_low_oct": 0.50,
       "lf_blend_high_oct": 1.0,
-      "stereo_angle_deg": 30.0
+      "stereo_angle_deg": 30.0,
+      "balance_weight_cv_threshold": 0.12,
+      "weighted_grid_scale_mode": "manual",
+      "weighted_grid_scale_low": 0.0001,
+      "weighted_grid_scale_high": 0.0025
     }
   },
   "averaging": {
