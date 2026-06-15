@@ -16,6 +16,8 @@
     "normalize_distance": true,
     "distance_m": 1.2,
     "hrir_length": 512,
+    "ild_fix": true,
+    "ild_threshold": 1.5,
     "naming": "s_{folder}_{filename}_{samplerate}_{eq}",
     "advanced": {
       "processing_length": 2048,
@@ -23,7 +25,9 @@
       "onset_buffer": 32,
       "onset_threshold_ratio": 0.05,
       "blend_low_oct": 0.50,
-      "blend_high_oct": 0.75
+      "blend_high_oct": 0.75,
+      "ild_low_freq": 300.0,
+      "ild_high_freq": 6000.0
     }
   },
   "dfhrtf": {

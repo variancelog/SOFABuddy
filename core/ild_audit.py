@@ -4,7 +4,7 @@ Diffuse-field inter-aural level difference (ILD) audit and correction.
 
 Functions
 ---------
-diffuse_field_ild(sofa_or_path, weighting_mode='auto') -> dict
+diffuse_field_ild(sofa_or_path, weighting_mode='auto', estimate_band=ESTIMATE_BAND) -> dict
     Compute a geometry-weighted DF ILD report for a raw SOFA file.
 
 apply_ild_fix(sofa, ild_estimate_db) -> sofa
@@ -42,7 +42,7 @@ ESTIMATE_BAND = (300, 6000)  # Hz: mid-band for robust ILD estimation
 _BANDS = [(100, 500), (500, 2000), (2000, 6000), (6000, 16000)]
 
 
-def diffuse_field_ild(sofa_or_path, weighting_mode="auto"):
+def diffuse_field_ild(sofa_or_path, weighting_mode="auto", estimate_band=ESTIMATE_BAND):
     """Return a diffuse-field ILD report for a SOFA file.
 
     Parameters
@@ -52,6 +52,10 @@ def diffuse_field_ild(sofa_or_path, weighting_mode="auto"):
     weighting_mode : {'auto', 'geometric', 'uniform'}
         Passed to calculate_geometric_weights.  'auto' uses the spherical-design
         classifier (will select 'geometric' for measured HRTF grids).
+    estimate_band : tuple of (float, float)
+        (low_hz, high_hz) frequency range used to compute the robust
+        ild_estimate_db that drives corrections.  Defaults to ESTIMATE_BAND
+        (300–6000 Hz).  Pass a custom tuple to override (e.g. from config).
 
     Returns
     -------
@@ -110,8 +114,8 @@ def diffuse_field_ild(sofa_or_path, weighting_mode="auto"):
         else:
             band_ild_db[(lo, hi)] = float("nan")
 
-    # Robust mid-band ILD estimate for corrections (dB-domain mean, 300–6 kHz).
-    lo_est, hi_est = ESTIMATE_BAND
+    # Robust mid-band ILD estimate for corrections (dB-domain mean over estimate_band).
+    lo_est, hi_est = estimate_band
     mid_mask = (freqs >= lo_est) & (freqs < hi_est)
     if mid_mask.any():
         db_diff_mid = 20.0 * np.log10((DF[0, mid_mask] + eps) / (DF[1, mid_mask] + eps))

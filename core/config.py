@@ -54,6 +54,8 @@ SCHEMA: dict[str, dict] = {
     "sofa.normalize_distance":  {"type": bool},
     "sofa.distance_m":          {"type": float, "min": 1.0, "max": 2.0},
     "sofa.hrir_length":         {"type": (int, float), "min": 128, "max": 1024},
+    "sofa.ild_fix":             {"type": bool},
+    "sofa.ild_threshold":       {"type": float, "min": 0.1, "max": 3.0},
     "sofa.naming":              {"type": str},
 
     # -- sofa.advanced (hidden tunables) --
@@ -63,6 +65,8 @@ SCHEMA: dict[str, dict] = {
     "sofa.advanced.onset_threshold_ratio":  {"type": float, "min": 0.001, "max": 0.5},
     "sofa.advanced.blend_low_oct":          {"type": float, "min": 0.1, "max": 2.0},
     "sofa.advanced.blend_high_oct":         {"type": float, "min": 0.1, "max": 2.0},
+    "sofa.advanced.ild_low_freq":           {"type": float, "min": 20.0,   "max": 1000.0},
+    "sofa.advanced.ild_high_freq":          {"type": float, "min": 1000.0, "max": 20000.0},
 
     # -- dfhrtf (surfaced settings) --
     "dfhrtf.enabled":             {"type": bool},

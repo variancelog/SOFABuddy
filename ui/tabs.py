@@ -465,6 +465,19 @@ class SofaTab(QWidget):
         dist_layout.addWidget(self.btn_dist)
         dist_layout.addWidget(self.slider_dist)
 
+        ild_layout = QHBoxLayout()
+        self.btn_ild = FlameToggleButton("Balance ILDs")
+        self.btn_ild.setToolTip("<p>Correct left/right diffuse-field level (ILD) calibration offsets in the mastered SOFA. A split-level scalar gain is applied symmetrically to L and R, preserving ITD and per-direction HRIR structure. Only corrects when the estimated ILD exceeds the threshold.</p>")
+        self.btn_ild.setChecked(True)
+        self.slider_ild = FlameNumericSlider(
+            "dB", 0.1, 3.0, 0.1, 1.5,
+            allowed_values=[round(i * 0.1, 1) for i in range(1, 31)]
+        )
+        self.slider_ild.setToolTip("<p>ILD correction threshold in dB. Files whose estimated diffuse-field ILD (300–6000 Hz) exceeds this value are corrected. Calibration offsets are typically ≥ 1.5 dB; genuine acoustic ILD is usually &lt; 0.5 dB.</p>")
+        self.btn_ild.toggled.connect(self.slider_ild.setEnabled)
+        ild_layout.addWidget(self.btn_ild)
+        ild_layout.addWidget(self.slider_ild)
+
         self.slider_length = FlameNumericSlider("Samples", 128.0, 1024.0, 128.0, 512.0)
         self.slider_length.setToolTip("<p>Output HRIR sample length. 512 recommended for most cases.</p>")
 
@@ -482,13 +495,16 @@ class SofaTab(QWidget):
         grid.addWidget(FlameLabel("Equalization:"), 2, 0)
         grid.addLayout(eq_layout, 2, 1)
 
-        grid.addWidget(FlameLabel("Distance:"), 3, 0)
-        grid.addLayout(dist_layout, 3, 1)
+        grid.addWidget(FlameLabel("ILD:"), 3, 0)
+        grid.addLayout(ild_layout, 3, 1)
 
-        grid.addWidget(FlameLabel("HRIR Length:"), 4, 0)
-        grid.addWidget(self.slider_length, 4, 1)
-        grid.addWidget(self.lbl_naming, 5, 0)
-        grid.addWidget(self.edit_naming, 5, 1)
+        grid.addWidget(FlameLabel("Distance:"), 4, 0)
+        grid.addLayout(dist_layout, 4, 1)
+
+        grid.addWidget(FlameLabel("HRIR Length:"), 5, 0)
+        grid.addWidget(self.slider_length, 5, 1)
+        grid.addWidget(self.lbl_naming, 6, 0)
+        grid.addWidget(self.edit_naming, 6, 1)
 
         self.container_layout.addLayout(grid)
         self.layout.addWidget(self.container)
@@ -512,6 +528,8 @@ class SofaTab(QWidget):
             'xover': self.slider_xover.get_value(),
             'uneq': self.btn_uneq.get_value(),
             'dfeq': self.btn_dfeq.get_value(),
+            'ild_fix': self.btn_ild.get_value(),
+            'ild_threshold': self.slider_ild.get_value(),
             'normalize_distance': self.btn_dist.get_value(),
             'distance_m': self.slider_dist.get_value(),
             'hrir_length': self.slider_length.get_value(),
@@ -529,6 +547,8 @@ class SofaTab(QWidget):
         self.slider_xover.set_value(cfg.get('xover', 375.0))
         self.btn_uneq.set_value(bool(cfg.get('uneq', False)))
         self.btn_dfeq.set_value(bool(cfg.get('dfeq', True)))
+        self.btn_ild.set_value(bool(cfg.get('ild_fix', True)))
+        self.slider_ild.set_value(cfg.get('ild_threshold', 1.5))
         self.btn_dist.set_value(bool(cfg.get('normalize_distance', True)))
         self.slider_dist.set_value(cfg.get('distance_m', 1.2))
         self.slider_length.set_value(cfg.get('hrir_length', 512))
@@ -536,6 +556,7 @@ class SofaTab(QWidget):
 
         # Sync slider enable states
         self.slider_xover.setEnabled(bool(cfg.get('lf_extension', False)))
+        self.slider_ild.setEnabled(bool(cfg.get('ild_fix', True)))
         self.slider_dist.setEnabled(bool(cfg.get('normalize_distance', True)))
 
         # Enable/disable the whole container (fires sofa_toggled signal)

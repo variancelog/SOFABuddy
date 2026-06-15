@@ -120,6 +120,10 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     onset_threshold      = getattr(args, 'onset_threshold',      0.05)
     blend_low_oct        = getattr(args, 'blend_low_oct',        0.50)
     blend_high_oct       = getattr(args, 'blend_high_oct',       0.75)
+    ild_fix              = getattr(args, 'ild_fix',              False)
+    ild_threshold        = getattr(args, 'ild_threshold',        1.5)
+    ild_low_freq         = getattr(args, 'ild_low_freq',         300.0)
+    ild_high_freq        = getattr(args, 'ild_high_freq',        6000.0)
 
     out_sofa = raw_sofa.copy()
     hrirs = out_sofa.Data_IR.copy()
@@ -295,6 +299,25 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
 
     # 11. Save
     out_sofa.Data_IR = hrirs.astype(np.float32)
+
+    # 9. ILD Balance — runs on the fully-assembled mastered sofar object so it
+    # applies to the final combined signal (post-EQ, post-normalize).  Guard on
+    # R == 2: apply_ild_fix indexes channels 0 and 1 directly.
+    if ild_fix and out_sofa.Data_IR.shape[1] == 2:
+        from core.ild_audit import diffuse_field_ild, apply_ild_fix
+        ild_report = diffuse_field_ild(
+            out_sofa,
+            weighting_mode=args.weighting_mode,
+            estimate_band=(ild_low_freq, ild_high_freq),
+        )
+        ild_est = ild_report["ild_estimate_db"]
+        if abs(ild_est) > ild_threshold:
+            print(f"   9. Balancing ILD: {ild_est:+.2f} dB offset corrected.")
+            apply_ild_fix(out_sofa, ild_est)
+            out_sofa.Data_IR = out_sofa.Data_IR.astype(np.float32)
+        else:
+            print(f"   9. ILD within threshold ({ild_est:+.2f} dB <= {ild_threshold:.1f} dB); no correction.")
+
     out_sofa.Data_SamplingRate = float(target_fs)
     # SOFA convention requires all *_Units values to be lowercase.
     # Some source files carry "Hertz" / "Metres" which sofar rejects on write.
@@ -379,6 +402,15 @@ def main():
                         choices=["auto", "geometric", "uniform"],
                         help="Grid weighting: auto (design-test), geometric, or uniform 1/N")
 
+    # ILD balancing (forwarded from sofa config keys)
+    parser.add_argument("--ild-fix",       action="store_true",
+                        help="Balance inter-aural level differences after mastering.")
+    parser.add_argument("--ild-threshold", type=float, default=1.5,
+                        help="ILD correction threshold in dB (default: 1.5).")
+    parser.add_argument("--ild-low-freq",  type=float, default=300.0,
+                        help="ILD estimation band low edge in Hz (default: 300.0).")
+    parser.add_argument("--ild-high-freq", type=float, default=6000.0,
+                        help="ILD estimation band high edge in Hz (default: 6000.0).")
 
     args = parser.parse_args()
 

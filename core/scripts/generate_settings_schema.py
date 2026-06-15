@@ -83,6 +83,16 @@ DESCRIPTIONS: dict[str, str] = {
         "Output HRIR length in samples after processing and windowing. "
         "Shorter lengths reduce CPU/memory cost at the expense of LF resolution."
     ),
+    "sofa.ild_fix": (
+        "Balance inter-aural level differences (ILD) in mastered SOFA files. "
+        "Applies a split-level broadband scalar correction when the estimated "
+        "diffuse-field ILD exceeds ild_threshold."
+    ),
+    "sofa.ild_threshold": (
+        "ILD correction threshold in dB. Files whose estimated diffuse-field "
+        "ILD (300–6000 Hz mean) exceeds this value are corrected. Calibration "
+        "offsets are typically ≥ 1.5 dB; acoustic ILD is usually < 0.5 dB."
+    ),
     "sofa.naming": (
         "Output filename template for mastered SOFA files. "
         "Supported variables: {folder}, {filename}, {samplerate}, {eq}."
@@ -112,6 +122,14 @@ DESCRIPTIONS: dict[str, str] = {
     "sofa.advanced.blend_high_oct": (
         "Upper fade width in octaves above sofa.xover. The original signal is "
         "fully restored at xover × 2^blend_high_oct."
+    ),
+    "sofa.advanced.ild_low_freq": (
+        "Lower edge (Hz) of the frequency band used to estimate the "
+        "diffuse-field ILD for correction. Default 300 Hz."
+    ),
+    "sofa.advanced.ild_high_freq": (
+        "Upper edge (Hz) of the frequency band used to estimate the "
+        "diffuse-field ILD for correction. Default 6000 Hz."
     ),
 
     # dfhrtf — surfaced settings

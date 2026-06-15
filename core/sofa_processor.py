@@ -106,6 +106,15 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
                     cmd.extend(["--weighting-mode",
                                  str(df_cfg.get('weighting_mode', 'Auto')).lower()])
 
+                    # ILD balancing (driven by sofa config keys)
+                    if sofa_cfg.get('ild_fix', True):
+                        cmd.append("--ild-fix")
+                    cmd.extend(["--ild-threshold",
+                                 str(float(sofa_cfg.get('ild_threshold', 1.5)))])
+                    cmd.extend(["--ild-low-freq",
+                                 str(float(sofa_adv.get('ild_low_freq', 300.0)))])
+                    cmd.extend(["--ild-high-freq",
+                                 str(float(sofa_adv.get('ild_high_freq', 6000.0)))])
 
                     tasks.append({
                         'cmd': cmd,

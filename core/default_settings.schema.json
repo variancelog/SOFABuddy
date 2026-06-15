@@ -89,6 +89,16 @@
           "maximum": 1024,
           "description": "Output HRIR length in samples after processing and windowing. Shorter lengths reduce CPU/memory cost at the expense of LF resolution."
         },
+        "ild_fix": {
+          "type": "boolean",
+          "description": "Balance inter-aural level differences (ILD) in mastered SOFA files. Applies a split-level broadband scalar correction when the estimated diffuse-field ILD exceeds ild_threshold."
+        },
+        "ild_threshold": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 3.0,
+          "description": "ILD correction threshold in dB. Files whose estimated diffuse-field ILD (300\u20136000 Hz mean) exceeds this value are corrected. Calibration offsets are typically \u2265 1.5 dB; acoustic ILD is usually < 0.5 dB."
+        },
         "naming": {
           "type": "string",
           "description": "Output filename template for mastered SOFA files. Supported variables: {folder}, {filename}, {samplerate}, {eq}."
@@ -132,6 +142,18 @@
               "minimum": 0.1,
               "maximum": 2.0,
               "description": "Upper fade width in octaves above sofa.xover. The original signal is fully restored at xover \u00d7 2^blend_high_oct."
+            },
+            "ild_low_freq": {
+              "type": "number",
+              "minimum": 20.0,
+              "maximum": 1000.0,
+              "description": "Lower edge (Hz) of the frequency band used to estimate the diffuse-field ILD for correction. Default 300 Hz."
+            },
+            "ild_high_freq": {
+              "type": "number",
+              "minimum": 1000.0,
+              "maximum": 20000.0,
+              "description": "Upper edge (Hz) of the frequency band used to estimate the diffuse-field ILD for correction. Default 6000 Hz."
             }
           },
           "description": "Advanced SOFA mastering tunables. Not surfaced in the UI \u2014 edit this file directly."
@@ -298,7 +320,6 @@
               "maximum": 90.0,
               "description": "Azimuth angle (degrees) used when extracting L/R off-axis curves for stereo graph outputs."
             },
-
             "weighted_grid_scale_mode": {
               "enum": [
                 "auto",
