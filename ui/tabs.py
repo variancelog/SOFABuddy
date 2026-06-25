@@ -1,9 +1,18 @@
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QPushButton, QGroupBox, QLabel, QGridLayout, QLineEdit, QFileDialog, QMenu
+import os
+
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QPushButton, QGroupBox, QLabel, QGridLayout, QLineEdit, QFileDialog, QMenu
 from PySide6.QtCore import Signal, Qt
 
 from ui.widgets import FlameToggleButton, FlameDropdown, FlameNumericSlider, FlameLabel, FlameLineEdit
 from ui.theme import BG_WIDGET, BG_CONTROL, ACCENT, FG, CONTROL_HEIGHT
 from core.sofa_utils import get_sofa_metadata, calculate_max_itd, calculate_grid_radius, get_grid_cartesian
+
+
+class _FilePathItem(QListWidgetItem):
+    """List item that displays the full path but sorts by filename (basename)."""
+    def __lt__(self, other):
+        return os.path.basename(self.text()).lower() < os.path.basename(other.text()).lower()
+
 
 # --- Files Tab Widget ---
 class FilesTab(QWidget):
@@ -15,6 +24,7 @@ class FilesTab(QWidget):
 
         self._itd_cache = {}    # Cache for calculated ITDs
         self._radius_cache = {} # Cache for calculated grid radii
+        self._grid_viewers = [] # Keep refs to open grid-viewer figures/callbacks
 
         # --- Top content: file list + right panel ---
         content = QHBoxLayout()
@@ -23,6 +33,8 @@ class FilesTab(QWidget):
 
         # - File list
         self.file_list = QListWidget()
+        self.file_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.file_list.setSortingEnabled(True)
         self.file_list.setStyleSheet(f"""
             QListWidget {{
                 background-color: {BG_WIDGET};
@@ -141,73 +153,9 @@ class FilesTab(QWidget):
 
         self.file_list.itemSelectionChanged.connect(self._on_file_selection_changed)
 
-        # --- Output Folder row (spans full width at bottom) ---
-        out_row = QHBoxLayout()
-        out_row.setContentsMargins(0, 6, 0, 0)
-        out_row.setSpacing(8)
-        out_row.addWidget(FlameLabel("Output Folder:"))
-
-        self.btn_output_default = FlameToggleButton("Default", padding_h=10)
-        self.btn_output_default.setToolTip(
-            "<p>Each file's outputs go to <b>sofa_mastered/</b> and <b>DFHRTF/</b> subfolders "
-            "inside its own source folder. Global averaging produces a per-folder average.</p>"
-        )
-        self.btn_output_default.setChecked(True)
-        self.btn_output_custom = FlameToggleButton("Custom:", padding_h=10)
-        self.btn_output_custom.setToolTip(
-            "<p>All outputs go under the chosen folder (with <b>sofa_mastered/</b> and <b>DFHRTF/</b> subfolders). "
-            "Global averaging produces a single average across all files.</p>"
-        )
-        self.edit_output_folder = FlameLineEdit("")
-        self.edit_output_folder.setToolTip("<p>Root folder for all outputs (sofa_mastered/ and DFHRTF/ will be created inside it).</p>")
-        self.edit_output_folder.setEnabled(False)
-        self.btn_output_browse = QPushButton("...")
-        self.btn_output_browse.setEnabled(False)
-        self.btn_output_browse.setFixedWidth(40)
-        self.btn_output_browse.setStyleSheet(
-            f"background-color: {BG_CONTROL}; color: {FG}; border: none; "
-            f"min-height: {CONTROL_HEIGHT}px; max-height: {CONTROL_HEIGHT}px;"
-        )
-
-        self.btn_output_default.toggled.connect(self._on_output_default_toggled)
-        self.btn_output_custom.toggled.connect(self._on_output_custom_toggled)
-        self.btn_output_browse.clicked.connect(self._browse_output_folder)
-
-        out_row.addWidget(self.btn_output_default)
-        out_row.addWidget(self.btn_output_custom)
-        out_row.addWidget(self.edit_output_folder, stretch=1)
-        out_row.addWidget(self.btn_output_browse)
-        self.layout.addLayout(out_row)
-
-    def _set_toggle(self, btn, value):
-        btn.blockSignals(True)
-        btn.setChecked(value)
-        btn.update_style()
-        btn.blockSignals(False)
-
-    def _on_output_default_toggled(self, checked):
-        if checked:
-            self._set_toggle(self.btn_output_custom, False)
-        elif not self.btn_output_custom.isChecked():
-            self._set_toggle(self.btn_output_default, True)
-        self._sync_output_enabled()
-
-    def _on_output_custom_toggled(self, checked):
-        if checked:
-            self._set_toggle(self.btn_output_default, False)
-        elif not self.btn_output_default.isChecked():
-            self._set_toggle(self.btn_output_default, True)
-        self._sync_output_enabled()
-
-    def _sync_output_enabled(self):
-        on = self.btn_output_custom.isChecked()
-        self.edit_output_folder.setEnabled(on)
-        self.btn_output_browse.setEnabled(on)
-
-    def _browse_output_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
-        if folder:
-            self.edit_output_folder.setText(folder)
+    def add_file(self, path: str) -> None:
+        """Add a single path to the (sorted, filename-keyed) file list."""
+        self.file_list.addItem(_FilePathItem(path))
 
     def _clear_list(self):
         self.file_list.clear()
@@ -230,170 +178,195 @@ class FilesTab(QWidget):
         if menu.exec(self.file_list.mapToGlobal(pos)) is act_remove:
             self._remove_selected()
 
-    def _on_file_selection_changed(self):
-        selected = self.file_list.selectedItems()
-        if not selected:
-            self.lbl_samplerate.setText("Samplerate: -")
-            self.lbl_length.setText("Length: -")
-            self.lbl_points.setText("Points: -")
-            self.lbl_itd_val.setText("-")
+    def _clear_single_file_info(self, samplerate_text="Samplerate: -"):
+        self.lbl_samplerate.setText(samplerate_text)
+        self.lbl_length.setText("Length: -")
+        self.lbl_points.setText("Points: -")
+        self.lbl_itd_val.setText("-")
+        self.btn_calc_itd.hide()
+        self.lbl_itd_val.show()
+        self.lbl_radius_val.setText("-")
+        self.btn_calc_radius.hide()
+        self.lbl_radius_val.show()
+
+    def _show_calc_buttons(self):
+        """Surface the ITD/radius Calculate buttons (used for multi-select batch calc)."""
+        self.lbl_itd_val.hide()
+        self.btn_calc_itd.setText("Calculate")
+        self.btn_calc_itd.setEnabled(True)
+        self.btn_calc_itd.show()
+        self.lbl_radius_val.hide()
+        self.btn_calc_radius.setText("Calculate")
+        self.btn_calc_radius.setEnabled(True)
+        self.btn_calc_radius.show()
+
+    def _show_single_file_info(self, file_path):
+        meta = get_sofa_metadata(file_path)
+        if not meta:
+            self._clear_single_file_info("Samplerate: ERROR")
+            self.btn_view_grid.setEnabled(False)
+            return
+
+        self.lbl_samplerate.setText(f"Samplerate: {int(meta['samplerate'])} Hz")
+        self.lbl_length.setText(f"Length: {meta['length']} samples")
+        self.lbl_points.setText(f"Points: {meta['points']}")
+
+        # Update ITD display from cache
+        if file_path in self._itd_cache:
+            self.lbl_itd_val.setText(f"{self._itd_cache[file_path]:.2f} ms")
             self.btn_calc_itd.hide()
             self.lbl_itd_val.show()
-            self.lbl_radius_val.setText("-")
+        else:
+            self.lbl_itd_val.hide()
+            self.btn_calc_itd.setText("Calculate")
+            self.btn_calc_itd.setEnabled(True)
+            self.btn_calc_itd.show()
+
+        # Update Grid Radius display from cache
+        if file_path in self._radius_cache:
+            self.lbl_radius_val.setText(f"{self._radius_cache[file_path]:.2f} m")
             self.btn_calc_radius.hide()
             self.lbl_radius_val.show()
+        else:
+            self.lbl_radius_val.hide()
+            self.btn_calc_radius.setText("Calculate")
+            self.btn_calc_radius.setEnabled(True)
+            self.btn_calc_radius.show()
+
+        self.btn_view_grid.setEnabled(True)
+
+    def _on_file_selection_changed(self):
+        selected = self.file_list.selectedItems()
+
+        if not selected:
+            self._clear_single_file_info()
             self.btn_view_grid.setEnabled(False)
             self.btn_remove_selected.setEnabled(False)
             return
 
-        file_path = selected[0].text()
-        meta = get_sofa_metadata(file_path)
+        self.btn_remove_selected.setEnabled(True)
 
-        if meta:
-            self.lbl_samplerate.setText(f"Samplerate: {int(meta['samplerate'])} Hz")
-            self.lbl_length.setText(f"Length: {meta['length']} samples")
-            self.lbl_points.setText(f"Points: {meta['points']}")
+        if len(selected) == 1:
+            self._show_single_file_info(selected[0].text())
+            return
 
-            # Update ITD display from cache
-            if file_path in self._itd_cache:
-                self.lbl_itd_val.setText(f"{self._itd_cache[file_path]:.2f} ms")
-                self.btn_calc_itd.hide()
-                self.lbl_itd_val.show()
-            else:
-                self.lbl_itd_val.hide()
-                self.btn_calc_itd.setText("Calculate")
-                self.btn_calc_itd.setEnabled(True)
-                self.btn_calc_itd.show()
-
-            # Update Grid Radius display from cache
-            if file_path in self._radius_cache:
-                self.lbl_radius_val.setText(f"{self._radius_cache[file_path]:.2f} m")
-                self.btn_calc_radius.hide()
-                self.lbl_radius_val.show()
-            else:
-                self.lbl_radius_val.hide()
-                self.btn_calc_radius.setText("Calculate")
-                self.btn_calc_radius.setEnabled(True)
-                self.btn_calc_radius.show()
-
-            self.btn_view_grid.setEnabled(True)
-            self.btn_remove_selected.setEnabled(True)
-        else:
-            self.lbl_samplerate.setText("Samplerate: ERROR")
-            self.lbl_length.setText("Length: -")
-            self.lbl_points.setText("Points: -")
-            self.lbl_itd_val.setText("-")
-            self.btn_calc_itd.hide()
-            self.lbl_itd_val.show()
-            self.lbl_radius_val.setText("-")
-            self.btn_calc_radius.hide()
-            self.lbl_radius_val.show()
-            self.btn_view_grid.setEnabled(False)
-            self.btn_remove_selected.setEnabled(True)  # file exists even if metadata fails
+        # Multi-select: panel can't show every file. Show a placeholder, but keep
+        # the Calculate buttons live so the user can batch-calc all selected files.
+        self._clear_single_file_info("Samplerate: Multiple selected")
+        self._show_calc_buttons()
+        self.btn_view_grid.setEnabled(True)
 
     def _on_calc_itd_clicked(self):
         selected = self.file_list.selectedItems()
-        if not selected: return
+        if not selected:
+            return
 
-        file_path = selected[0].text()
         self.btn_calc_itd.setText("...")
         self.btn_calc_itd.setEnabled(False)
-        self.repaint() # Force UI update to show "..."
+        self.repaint()  # Force UI update to show "..."
 
-        itd_ms = calculate_max_itd(file_path)
-        self._itd_cache[file_path] = itd_ms
+        for item in selected:
+            file_path = item.text()
+            self._itd_cache[file_path] = calculate_max_itd(file_path)
 
-        self.lbl_itd_val.setText(f"{itd_ms:.2f} ms")
-        self.btn_calc_itd.hide()
-        self.lbl_itd_val.show()
+        if len(selected) == 1:
+            self.lbl_itd_val.setText(f"{self._itd_cache[selected[0].text()]:.2f} ms")
+            self.btn_calc_itd.hide()
+            self.lbl_itd_val.show()
+        else:
+            self.btn_calc_itd.setText("Calculate")
+            self.btn_calc_itd.setEnabled(True)
 
     def _on_calc_radius_clicked(self):
         selected = self.file_list.selectedItems()
-        if not selected: return
+        if not selected:
+            return
 
-        file_path = selected[0].text()
         self.btn_calc_radius.setText("...")
         self.btn_calc_radius.setEnabled(False)
-        self.repaint() # Force UI update to show "..."
+        self.repaint()  # Force UI update to show "..."
 
-        radius_m = calculate_grid_radius(file_path)
-        self._radius_cache[file_path] = radius_m
+        for item in selected:
+            file_path = item.text()
+            self._radius_cache[file_path] = calculate_grid_radius(file_path)
 
-        self.lbl_radius_val.setText(f"{radius_m:.2f} m")
-        self.btn_calc_radius.hide()
-        self.lbl_radius_val.show()
+        if len(selected) == 1:
+            self.lbl_radius_val.setText(f"{self._radius_cache[selected[0].text()]:.2f} m")
+            self.btn_calc_radius.hide()
+            self.lbl_radius_val.show()
+        else:
+            self.btn_calc_radius.setText("Calculate")
+            self.btn_calc_radius.setEnabled(True)
 
     def _on_view_grid_clicked(self):
         selected = self.file_list.selectedItems()
         if not selected:
             return
 
-        file_path = selected[0].text()
-        grid = get_grid_cartesian(file_path)
-        if grid is None:
+        # Load grids for all selected files (skip any that fail to read).
+        grids = []
+        for item in selected:
+            file_path = item.text()
+            grid = get_grid_cartesian(file_path)
+            if grid is not None:
+                stem = os.path.splitext(os.path.basename(file_path))[0]
+                grids.append((stem, grid))
+        if not grids:
             return
 
-        import os
         import matplotlib
         matplotlib.use('QtAgg')
         import matplotlib.pyplot as plt
 
-        cart = grid['cart']
-        radius = grid['radius']
-        n_nodes = grid['n_nodes']
-
-        stem = os.path.splitext(os.path.basename(file_path))[0]
-
         fig = plt.figure(figsize=(8, 8))
-        try:
-            fig.canvas.manager.set_window_title(stem)
-        except Exception:
-            pass  # headless or backend without window manager
         ax = fig.add_subplot(111, projection='3d')
-        ax.scatter(cart[:, 0], cart[:, 1], cart[:, 2], c='black', s=4)
-        ax.set_title(f"{radius:g} m radius, {n_nodes} nodes")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")
-        ax.set_box_aspect([1, 1, 1])
+        state = {'idx': 0}
+
+        def draw(i):
+            stem, grid = grids[i]
+            cart = grid['cart']
+            ax.clear()
+            ax.scatter(cart[:, 0], cart[:, 1], cart[:, 2], c='black', s=4)
+            suffix = f"  ({i + 1}/{len(grids)}  ←/→)" if len(grids) > 1 else ""
+            ax.set_title(f"{grid['radius']:g} m radius, {grid['n_nodes']} nodes{suffix}")
+            ax.set_xlabel("x")
+            ax.set_ylabel("y")
+            ax.set_zlabel("z")
+            ax.set_box_aspect([1, 1, 1])
+            try:
+                fig.canvas.manager.set_window_title(stem)
+            except Exception:
+                pass  # headless or backend without window manager
+            fig.canvas.draw_idle()
+
+        def on_key(event):
+            if event.key == 'right':
+                state['idx'] = (state['idx'] + 1) % len(grids)
+                draw(state['idx'])
+            elif event.key == 'left':
+                state['idx'] = (state['idx'] - 1) % len(grids)
+                draw(state['idx'])
+
+        cid = fig.canvas.mpl_connect('key_press_event', on_key)
+        # Keep references alive so the key callback keeps firing.
+        self._grid_viewers.append((fig, on_key, cid))
+        draw(0)
         plt.show(block=False)
 
     def _open_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Select SOFA files", "", "SOFA Files (*.sofa *.SOFA)")
-        if files:
-            self.file_list.addItems(files)
+        for f in files:
+            self.add_file(f)
 
     def _open_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
         if folder:
-            import os
             for f in os.listdir(folder):
                 if f.lower().endswith('.sofa'):
-                    self.file_list.addItem(os.path.join(folder, f))
+                    self.add_file(os.path.join(folder, f))
 
     def get_config(self) -> list:
         return [self.file_list.item(i).text() for i in range(self.file_list.count())]
-
-    def get_output_config(self) -> dict:
-        return {
-            'default': self.btn_output_default.get_value(),
-            'folder': self.edit_output_folder.text().strip()
-        }
-
-    def set_output_config(self, cfg: dict) -> None:
-        """Restore the output-folder row from a saved config dict."""
-        use_default = bool(cfg.get('default', True))
-        folder = cfg.get('folder', '')
-
-        # Drive through the toggle handlers to keep visual state consistent
-        if use_default:
-            self._set_toggle(self.btn_output_default, True)
-            self._set_toggle(self.btn_output_custom, False)
-        else:
-            self._set_toggle(self.btn_output_default, False)
-            self._set_toggle(self.btn_output_custom, True)
-        self.edit_output_folder.setText(folder)
-        self._sync_output_enabled()
 
 # --- SOFA Tab Widget
 class SofaTab(QWidget):
@@ -473,7 +446,7 @@ class SofaTab(QWidget):
             "dB", 0.1, 3.0, 0.1, 1.5,
             allowed_values=[round(i * 0.1, 1) for i in range(1, 31)]
         )
-        self.slider_ild.setToolTip("<p>ILD correction threshold in dB. Files whose estimated diffuse-field ILD (300–6000 Hz) exceeds this value are corrected. Calibration offsets are typically ≥ 1.5 dB; genuine acoustic ILD is usually &lt; 0.5 dB.</p>")
+        self.slider_ild.setToolTip("<p>ILD correction threshold in dB. Files whose estimated diffuse-field ILD (300–4000 Hz) exceeds this value are corrected. Calibration offsets are typically ≥ 1.5 dB; genuine acoustic ILD is usually &lt; 0.5 dB.</p>")
         self.btn_ild.toggled.connect(self.slider_ild.setEnabled)
         ild_layout.addWidget(self.btn_ild)
         ild_layout.addWidget(self.slider_ild)

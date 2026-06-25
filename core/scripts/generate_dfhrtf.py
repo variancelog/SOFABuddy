@@ -1,12 +1,17 @@
 import argparse
 import os
 import sys
-import numpy as np
-import sofar as sf
-import scipy.fft as fft
-import matplotlib.pyplot as plt
-import csv
-import re
+import warnings
+# Silence requests' RequestsDependencyWarning (chardet 6.x > its supported ceiling).
+# Must precede `import sofar`, which eagerly imports requests and would otherwise
+# emit the warning before any later filter is registered.
+warnings.filterwarnings("ignore", message=r".*doesn't match a supported version.*")
+import numpy as np  # noqa: E402
+import sofar as sf  # noqa: E402
+import scipy.fft as fft  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+import csv  # noqa: E402
+import re  # noqa: E402
 
 # Bootstrap project root onto sys.path so core.* imports work when this script
 # is launched as a subprocess (no cwd / PYTHONPATH guarantees from the caller).
@@ -17,17 +22,12 @@ from core.geometry_weights import (  # noqa: E402
     calculate_geometric_weights,
 )
 
-""" Note: To learn more about how this script computes Diffuse Field HRTF
-    (DFHRTF) from the SOFA files, please read `readme_dfhrtf_calculation.md
-    in the repo """
-
 # Marker area (pts²) for the weighted-grid plot.  Size is constant so that
 # comparisons across files differ only in color, not marker footprint.
 WEIGHTED_GRID_NODE_SIZE = 20
 
 
 # ================= HELPER FUNCTIONS =================
-
 
 
 def find_closest_grid_point(source_pos, target_az, target_el):
@@ -172,11 +172,6 @@ def main():
     parser.add_argument("--stereo-angle",            type=float, default=30.0,
                         help="Azimuth angle (degrees) for stereo graph L/R measurement")
     
-    # Legacy/Misc
-    parser.add_argument("--output_dir", help="Output folder (used if explicit paths not provided)")
-    parser.add_argument("--prefix", type=str, default="", help="Optional file prefix")
-    parser.add_argument("--squigify", action="store_true", help="Enable Squiglink optimized DFHRTF outputs")
-    parser.add_argument("--sim_meas", action="store_true", help="Tag output as Simulated instead of Measured")
     parser.add_argument("--advanced-dfeq", action="store_true", default=True, help="Use advanced data sanitization")
     parser.add_argument("--weighting-mode", default="auto", choices=["auto", "geometric", "uniform"],
                         help="Grid weighting mode: auto (detect balanced grids), geometric, or uniform 1/N")
@@ -187,7 +182,6 @@ def main():
                         help="Manual color-range minimum (default 0.001)")
     parser.add_argument("--grid-scale-high", type=float, default=0.003,
                         help="Manual color-range maximum (default 0.003)")
-    parser.add_argument("--only_plot", action="store_true", help="Generate only the plot, no text/CSV files")
     parser.add_argument("--preserve-lr-balance", action="store_true",
                         help="Normalize L and R with a single shared 1 kHz reference "
                              "(mean of L/R) to preserve the real inter-aural level offset")
@@ -297,11 +291,11 @@ def main():
         val_avg = CommonAxisInterpolator.unnormalize_magnitude(avg_norm, mag_min, mag_max)
 
     # 7. Generate Plot
-    if args.graph_out or args.only_plot or args.output_dir:
+    if args.graph_out:
         plt.figure(figsize=(10, 6))
         plt.semilogx(target_freqs, val_l, label='Left Ear', linewidth=2, alpha=0.8)
         plt.semilogx(target_freqs, val_r, label='Right Ear', linewidth=2, alpha=0.8, linestyle='--')
-        
+
         title_str = f"Diffuse Field HRTF (Normalized)\nSpectral Tilt: {args.tilt} dB/oct"
         plt.title(title_str)
         plt.xlabel("Frequency (Hz)")
@@ -310,19 +304,13 @@ def main():
         plt.grid(True, which="both", alpha=0.3)
         plt.legend()
         plt.xlim(20, 20000)
-        
-        if args.graph_out:
-            plt.savefig(args.graph_out, dpi=150)
-            print(f"   [+] Saved Plot: {os.path.basename(args.graph_out)}")
-        elif args.output_dir:
-            base_name = os.path.splitext(os.path.basename(args.input))[0]
-            plot_name = f"{args.prefix}{base_name} Tilt {args.tilt} LR.png"
-            plt.savefig(os.path.join(args.output_dir, plot_name), dpi=150)
-            print(f"   [+] Saved Plot: {plot_name}")
-        
+
+        plt.savefig(args.graph_out, dpi=150)
+        print(f"   [+] Saved Plot: {os.path.basename(args.graph_out)}")
         plt.close()
 
     # 7.5 Stereo Graph (+/- stereo_angle degrees)
+    # To be added to an HRTF or Graph-specific Tab later
     if args.graph_stereo_out:
         az_left  = stereo_angle
         az_right = 360.0 - stereo_angle  # e.g. 330° for 30°
@@ -425,8 +413,6 @@ def main():
         print(f"   [+] Saved Weighted Grid: {os.path.basename(args.graph_weighted_out)}")
         plt.close()
 
-    if args.only_plot: return
-
     # 8. Save Text Files
     if args.text_out_l:
         save_text_data(args.text_out_l, target_freqs, val_l, args.delimiter)
@@ -434,21 +420,6 @@ def main():
         save_text_data(args.text_out_r, target_freqs, val_r, args.delimiter)
     if args.text_out_avg:
         save_text_data(args.text_out_avg, target_freqs, val_avg, args.delimiter)
-    
-    # Handle legacy saving if requested via output_dir
-    if not any([args.text_out_l, args.text_out_r, args.text_out_avg]) and args.output_dir:
-        base_name = os.path.splitext(os.path.basename(args.input))[0]
-        sim_meas_str = "Simulated" if args.sim_meas else "Measured"
-        ext = ".txt" if args.squigify else ".csv"
-        
-        l_path = os.path.join(args.output_dir, f"{args.prefix}{args.tilt:g} {base_name} {sim_meas_str} L{ext}")
-        r_path = os.path.join(args.output_dir, f"{args.prefix}{args.tilt:g} {base_name} {sim_meas_str} R{ext}")
-        save_text_data(l_path, target_freqs, val_l, args.delimiter)
-        save_text_data(r_path, target_freqs, val_r, args.delimiter)
-        
-        if not args.squigify:
-            avg_path = os.path.join(args.output_dir, f"{args.prefix}{args.tilt:g} {base_name} {sim_meas_str} Avg{ext}")
-            save_text_data(avg_path, target_freqs, val_avg, args.delimiter)
 
 if __name__ == "__main__":
     import traceback

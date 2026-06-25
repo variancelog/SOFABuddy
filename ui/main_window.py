@@ -1,7 +1,8 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QPlainTextEdit, QSplitter
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QPlainTextEdit, QSplitter, QFileDialog
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from ui.tabs import FilesTab, SofaTab, DfhrtfTab
+from ui.widgets import FlameLabel, FlameToggleButton, FlameLineEdit
 from ui.workers import ProcessingWorker
 from ui import theme as T
 from core import config as C
@@ -74,6 +75,44 @@ class SofaBuddyMainWindow(QMainWindow):
 
         top_layout.addWidget(self.stacked_widget)
 
+        # Output Folder row (global setting — applies to all output)
+        out_row = QHBoxLayout()
+        out_row.setContentsMargins(0, 6, 0, 0)
+        out_row.setSpacing(8)
+        out_row.addWidget(FlameLabel("Output Folder:"))
+
+        self.btn_output_default = FlameToggleButton("Default", padding_h=10)
+        self.btn_output_default.setToolTip(
+            "<p>Each file's outputs go to <b>sofa_mastered/</b> and <b>DFHRTF/</b> subfolders "
+            "inside its own source folder. Global averaging produces a per-folder average.</p>"
+        )
+        self.btn_output_default.setChecked(True)
+        self.btn_output_custom = FlameToggleButton("Custom:", padding_h=10)
+        self.btn_output_custom.setToolTip(
+            "<p>All outputs go under the chosen folder (with <b>sofa_mastered/</b> and <b>DFHRTF/</b> subfolders). "
+            "Global averaging produces a single average across all files.</p>"
+        )
+        self.edit_output_folder = FlameLineEdit("")
+        self.edit_output_folder.setToolTip("<p>Root folder for all outputs (sofa_mastered/ and DFHRTF/ will be created inside it).</p>")
+        self.edit_output_folder.setEnabled(False)
+        self.btn_output_browse = QPushButton("...")
+        self.btn_output_browse.setEnabled(False)
+        self.btn_output_browse.setFixedWidth(40)
+        self.btn_output_browse.setStyleSheet(
+            f"background-color: {T.BG_CONTROL}; color: {T.FG}; border: none; "
+            f"min-height: {T.CONTROL_HEIGHT}px; max-height: {T.CONTROL_HEIGHT}px;"
+        )
+
+        self.btn_output_default.toggled.connect(self._on_output_default_toggled)
+        self.btn_output_custom.toggled.connect(self._on_output_custom_toggled)
+        self.btn_output_browse.clicked.connect(self._browse_output_folder)
+
+        out_row.addWidget(self.btn_output_default)
+        out_row.addWidget(self.btn_output_custom)
+        out_row.addWidget(self.edit_output_folder, stretch=1)
+        out_row.addWidget(self.btn_output_browse)
+        top_layout.addLayout(out_row)
+
         # Action Bar
         action_bar = QHBoxLayout()
         self.btn_reset = QPushButton("Reset Settings")
@@ -130,22 +169,75 @@ class SofaBuddyMainWindow(QMainWindow):
         for w in mgr.warnings:
             self.append_error(f"[Config] {w}")
 
-        self.tab_files.set_output_config(cfg.get('output', {}))
+        self.set_output_config(cfg.get('output', {}))
         self.tab_sofa.set_config(cfg.get('sofa', {}))
         self.tab_dfhrtf.set_config(cfg.get('dfhrtf', {}))
 
     def _on_reset_clicked(self) -> None:
         """Reset all settings to factory defaults and update the tabs."""
         cfg = C.manager().reset()
-        self.tab_files.set_output_config(cfg.get('output', {}))
+        self.set_output_config(cfg.get('output', {}))
         self.tab_sofa.set_config(cfg.get('sofa', {}))
         self.tab_dfhrtf.set_config(cfg.get('dfhrtf', {}))
         self.append_log("[Config] Settings reset to defaults.")
 
+    # -- Output Folder row (global setting) --
+
+    def _set_toggle(self, btn, value):
+        btn.blockSignals(True)
+        btn.setChecked(value)
+        btn.update_style()
+        btn.blockSignals(False)
+
+    def _on_output_default_toggled(self, checked):
+        if checked:
+            self._set_toggle(self.btn_output_custom, False)
+        elif not self.btn_output_custom.isChecked():
+            self._set_toggle(self.btn_output_default, True)
+        self._sync_output_enabled()
+
+    def _on_output_custom_toggled(self, checked):
+        if checked:
+            self._set_toggle(self.btn_output_default, False)
+        elif not self.btn_output_default.isChecked():
+            self._set_toggle(self.btn_output_default, True)
+        self._sync_output_enabled()
+
+    def _sync_output_enabled(self):
+        on = self.btn_output_custom.isChecked()
+        self.edit_output_folder.setEnabled(on)
+        self.btn_output_browse.setEnabled(on)
+
+    def _browse_output_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
+        if folder:
+            self.edit_output_folder.setText(folder)
+
+    def get_output_config(self) -> dict:
+        return {
+            'default': self.btn_output_default.get_value(),
+            'folder': self.edit_output_folder.text().strip()
+        }
+
+    def set_output_config(self, cfg: dict) -> None:
+        """Restore the output-folder row from a saved config dict."""
+        use_default = bool(cfg.get('default', True))
+        folder = cfg.get('folder', '')
+
+        # Drive through the toggles to keep visual state consistent
+        if use_default:
+            self._set_toggle(self.btn_output_default, True)
+            self._set_toggle(self.btn_output_custom, False)
+        else:
+            self._set_toggle(self.btn_output_default, False)
+            self._set_toggle(self.btn_output_custom, True)
+        self.edit_output_folder.setText(folder)
+        self._sync_output_enabled()
+
     def closeEvent(self, event) -> None:
         """Persist current settings when the window is closed."""
         try:
-            snap = C.manager().snapshot(self.tab_files, self.tab_sofa, self.tab_dfhrtf)
+            snap = C.manager().snapshot(self.get_output_config(), self.tab_sofa, self.tab_dfhrtf)
             C.manager().save(snap)
         except Exception as exc:  # noqa: BLE001
             # Never block shutdown due to a config-save failure
@@ -202,7 +294,7 @@ class SofaBuddyMainWindow(QMainWindow):
         for url in event.mimeData().urls():
             file_path = url.toLocalFile()
             if file_path.lower().endswith('.sofa'):
-                self.tab_files.file_list.addItem(file_path)
+                self.tab_files.add_file(file_path)
                 added += 1
             else:
                 self.append_error(f"Error: Skipped invalid file '{file_path}'. Only .sofa files are supported.")
@@ -220,7 +312,7 @@ class SofaBuddyMainWindow(QMainWindow):
         # Snapshot live tab state over cached advanced/averaging sections, then persist.
         # Do this on the main thread before the worker starts (stable dict for the worker).
         mgr = C.manager()
-        snap = mgr.snapshot(self.tab_files, self.tab_sofa, self.tab_dfhrtf)
+        snap = mgr.snapshot(self.get_output_config(), self.tab_sofa, self.tab_dfhrtf)
         try:
             mgr.save(snap)
         except Exception as exc:  # noqa: BLE001

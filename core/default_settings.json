@@ -14,11 +14,11 @@
     "uneq": true,
     "dfeq": true,
     "normalize_distance": true,
-    "distance_m": 1.2,
+    "distance_m": 1.5,
     "hrir_length": 512,
     "ild_fix": true,
-    "ild_threshold": 1.5,
-    "naming": "s_{folder}_{filename}_{samplerate}_{eq}",
+    "ild_threshold": 1.4,
+    "naming": "{filename}-n {samplerate} {eq}",
     "advanced": {
       "processing_length": 2048,
       "norm_target_db": -1.0,
@@ -26,8 +26,8 @@
       "onset_threshold_ratio": 0.05,
       "blend_low_oct": 0.50,
       "blend_high_oct": 0.75,
-      "ild_low_freq": 300.0,
-      "ild_high_freq": 6000.0
+      "ild_low_freq": 350.0,
+      "ild_high_freq": 3500.0
     }
   },
   "dfhrtf": {
@@ -35,14 +35,15 @@
     "per_sofa_lr": true,
     "per_sofa_avg": false,
     "per_sofa_avg_algo": "Soft-DTW",
-    "text_filename": "t_{folder}_{filename}_{LR}",
+    "per_sofa_avg_filename": "{filename} avg LR",
+    "text_filename": "{filename} {LR}",
     "text_delimiter": "Tab",
     "text_extension": "txt",
     "dfhrtf_graphs": true,
     "weighting_mode": "Auto",
     "weighted_grid": true,
     "weighted_grid_scope": "Per Folder",
-    "graph_filename": "g_{folder}_{filename}_{graphtype}_LR",
+    "graph_filename": "{graphtype} {folder} {filename}",
     "graph_extension": "png",
     "smoothing": 24,
     "tilt": 0.0,
@@ -51,6 +52,7 @@
     "avg_all": false,
     "algo": "Soft-DTW",
     "exclude_outliers": true,
+    "avg_filename": "{folder} avg {LR}",
     "advanced": {
       "n_fft": 16384,
       "output_octave_fraction": 48,
@@ -66,13 +68,12 @@
     }
   },
   "averaging": {
-    "num_points": 512,
-    "outlier_threshold_std": 1.0,
-    "outlier_gamma": 1.0,
-    "softdtw_gamma_persofa": 0.01,
-    "softdtw_gamma_global": 0.03,
-    "softdtw_max_iter": 25,
-    "softdtw_tol": 0.001,
+    "num_points": 1024,
+    "outlier_threshold_std": 0.9,
+    "softdtw_gamma_persofa": 0.06,
+    "softdtw_gamma_global": 0.06,
+    "softdtw_max_iter": 15,
+    "softdtw_tol": 0.0015,
     "geo_arc_y_scale": 0.01
   }
 }

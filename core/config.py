@@ -45,6 +45,8 @@ SCHEMA: dict[str, dict] = {
     "sofa.enabled":             {"type": bool},
     "sofa.samplerates":         {"type": list, "item_type": int,
                                   "choices": [44100, 48000, 96000]},
+    # Inert placeholder (only one choice exists today) — consider surfacing
+    # additional phase modes as real options in settings.json when added.
     "sofa.phase_mode":          {"type": str,
                                   "choices": ["Original Phase"]},
     "sofa.lf_extension":        {"type": bool},
@@ -74,7 +76,9 @@ SCHEMA: dict[str, dict] = {
     "dfhrtf.per_sofa_avg":        {"type": bool},
     "dfhrtf.per_sofa_avg_algo":   {"type": str,
                                     "choices": ["Arithmetic Mean", "Geo-Arc-Length", "Soft-DTW"]},
-    "dfhrtf.text_filename":       {"type": str},
+    "dfhrtf.per_sofa_avg_filename": {"type": str},
+    "dfhrtf.text_filename":         {"type": str},
+    "dfhrtf.avg_filename":          {"type": str},
     "dfhrtf.text_delimiter":      {"type": str,
                                     "choices": ["Tab", "Comma", "Semicolon", "Space"]},
     "dfhrtf.text_extension":      {"type": str, "choices": ["txt", "csv"]},
@@ -112,7 +116,6 @@ SCHEMA: dict[str, dict] = {
     # -- averaging --
     "averaging.num_points":            {"type": int, "min": 64, "max": 4096},
     "averaging.outlier_threshold_std": {"type": float, "min": 0.1, "max": 10.0},
-    "averaging.outlier_gamma":         {"type": float, "min": 0.001, "max": 10.0},
     "averaging.softdtw_gamma_persofa": {"type": float, "min": 0.0001, "max": 10.0},
     "averaging.softdtw_gamma_global":  {"type": float, "min": 0.0001, "max": 10.0},
     "averaging.softdtw_max_iter":      {"type": int, "min": 5, "max": 200},
@@ -403,15 +406,15 @@ class ConfigManager:
 
     # -- Snapshot helper --
 
-    def snapshot(self, tab_files, tab_sofa, tab_dfhrtf) -> dict:
+    def snapshot(self, output_cfg, tab_sofa, tab_dfhrtf) -> dict:
         """
         Build a full persistable config dict from the current tab state.
         Live surfaced values are merged over the cached advanced/averaging
         sections so that JSON-only tunables are preserved across saves.
+        `output_cfg` is the output-folder dict from the main window.
         """
         cached = self.load()
 
-        output_cfg  = tab_files.get_output_config()
         sofa_live   = tab_sofa.get_config()    # no 'advanced' key
         dfhrtf_live = tab_dfhrtf.get_config()  # no 'advanced' key
 

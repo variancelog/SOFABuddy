@@ -163,10 +163,6 @@ DESCRIPTIONS: dict[str, str] = {
     "dfhrtf.dfhrtf_graphs": (
         "Generate a DFHRTF magnitude plot for each processed SOFA file."
     ),
-    "dfhrtf.stereo_graphs": (
-        "Generate ±stereo_angle_deg comparison graphs showing the L and R "
-        "off-axis curves alongside the DFHRTF."
-    ),
     "dfhrtf.weighted_grid": (
         "Generate a geometry-weighted measurement grid visualization plot."
     ),
@@ -244,10 +240,6 @@ DESCRIPTIONS: dict[str, str] = {
     "averaging.outlier_threshold_std": (
         "Outlier rejection threshold in standard deviations above the median "
         "pairwise distance. Curves exceeding median + N×std are removed."
-    ),
-    "averaging.outlier_gamma": (
-        "Soft-DTW gamma parameter used during outlier detection. Controls the "
-        "softness of the distance metric (higher = smoother gradient)."
     ),
     "averaging.softdtw_gamma_persofa": (
         "Soft-DTW gamma parameter for per-SOFA L+R barycenter averaging. "

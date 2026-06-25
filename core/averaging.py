@@ -155,7 +155,7 @@ class CommonAxisInterpolator:
 
 class OutlierDetector:
     @staticmethod
-    def filter_outliers(norm_mags_2d, method, threshold_std=2.0, gamma=1.0):
+    def filter_outliers(norm_mags_2d, method, threshold_std=2.0):
         """
         Calculates pairwise distances between all sequences, computes each sequence's 
         median distance to the rest of the batch, and flags sequences that exceed 
@@ -168,13 +168,8 @@ class OutlierDetector:
             return list(range(n)), []
 
         # 1. Compute Pairwise Distance Matrix
-        if method == "Soft-DTW Barycenter":
-            # tslearn expects (n_ts, sz, d)
-            ts_data = np.expand_dims(norm_mags_2d, axis=-1)
-            dist_matrix = cdist_soft_dtw(ts_data, ts_data, gamma=gamma)
-        else:
-            # Euclidean distance for Arithmetic Mean & Geometric Arc-Length
-            dist_matrix = squareform(pdist(norm_mags_2d, metric='euclidean'))
+        # Euclidean distance for all methods
+        dist_matrix = squareform(pdist(norm_mags_2d, metric='euclidean'))
 
         # 2. Calculate the average distance of each curve to all other curves
         # Summing each row and dividing by (n-1) to exclude the 0 distance to itself

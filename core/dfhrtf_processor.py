@@ -17,7 +17,7 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
     Orchestrates the full ingestion -> interpolation -> outlier -> averaging chain.
 
     avg_params is an optional dict drawn from config['averaging'] and may contain:
-      num_points, outlier_threshold_std, outlier_gamma,
+      num_points, outlier_threshold_std,
       softdtw_gamma, geo_arc_y_scale
     All keys fall back to the values used historically if absent.
     """
@@ -30,7 +30,6 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
     p = avg_params or {}
     num_points       = int(p.get('num_points', 512))
     threshold_std    = float(p.get('outlier_threshold_std', 1.0))
-    outlier_gamma    = float(p.get('outlier_gamma', 1.0))
     softdtw_gamma    = float(p.get('softdtw_gamma_global', 0.03))
     softdtw_max_iter = int(p.get('softdtw_max_iter', 25))
     softdtw_tol      = float(p.get('softdtw_tol', 0.001))
@@ -60,8 +59,7 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
             if stop_checker and stop_checker(): return
             valid_indices, excluded = OutlierDetector.filter_outliers(
                 norm_mags_2d, algo_name,
-                threshold_std=threshold_std,
-                gamma=outlier_gamma
+                threshold_std=threshold_std
             )
             if excluded:
                 log_callback(f" -> Excluded {len(excluded)} outliers.")
@@ -181,7 +179,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 resolved_inputs.append((f, os.path.splitext(os.path.basename(f))[0], "raw", os.path.dirname(f)))
 
         # Track generated L/R files grouped by output directory for per-group averaging
-        # groups[output_root] = {'l': [...], 'r': [...]}
+        # groups[output_root] = {'l': [...], 'r': [...], 'folder': source_folder_name}
         groups = {}
 
         # Track which output dirs have already received a weighted-grid plot (Per Folder scope)
@@ -255,12 +253,13 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 path_l = get_text_path("L")
                 path_r = get_text_path("R")
                 cmd.extend(["--text-out-l", path_l, "--text-out-r", path_r])
-                grp = groups.setdefault(output_root, {'l': [], 'r': []})
+                grp = groups.setdefault(output_root, {'l': [], 'r': [], 'folder': folder_name})
                 grp['l'].append(path_l)
                 grp['r'].append(path_r)
 
             if df_cfg.get('per_sofa_avg'):
-                cmd.extend(["--text-out-avg", get_text_path("Avg")])
+                avg_tmpl = df_cfg.get('per_sofa_avg_filename', "{filename} avg LR")
+                cmd.extend(["--text-out-avg", get_text_path("Avg", _tmpl=avg_tmpl)])
                 cmd.extend(["--avg-algo", df_cfg.get('per_sofa_avg_algo', 'Arithmetic Mean')])
 
             # Graph Outputs
@@ -319,15 +318,15 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             for name, rc in failures:
                 error_callback(f"  - {name}  (exit {rc})")
 
-        # 4. Post-Processing: Averaging (per output-folder group)
+        # 4. Post-Processing: Averaging - Global averages (per output-folder group)
         # Default mode: one group per source folder -> per-folder average
         # Custom mode: all files share one output_root -> single global average
         if df_cfg.get('avg_all') and groups:
             algo = df_cfg.get('algo', 'Soft-DTW')
-            exclude = df_cfg.get('exclude_outliers', False)
+            exclude = df_cfg.get('exclude_outliers', True)
             ext = f".{df_cfg.get('text_extension', 'txt')}"
             short_algo = {"Arithmetic Mean": "arithmean", "Geo-Arc-Length": "geoarc", "Soft-DTW": "softdtw"}.get(algo, "softdtw")
-            avg_template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
+            avg_template = df_cfg.get('avg_filename', "{folder} avg {LR}")
 
             for out_dir, grp in groups.items():
                 if not grp['l']:
@@ -338,9 +337,9 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 log_callback(f"\n--- Post-Processing: {label} ({os.path.basename(out_dir) or out_dir}) ---")
                 os.makedirs(out_dir, exist_ok=True)
 
-                def get_avg_path(lr_val, _dir=out_dir, _tmpl=avg_template, _ext=ext, _algo=short_algo, _tilt=tilt_str):
+                def get_avg_path(lr_val, _dir=out_dir, _tmpl=avg_template, _ext=ext, _algo=short_algo, _tilt=tilt_str, _folder=grp['folder']):
                     fname = _tmpl.replace("{filename}", "dfhrtfs_avg")
-                    fname = fname.replace("{folder}", os.path.basename(_dir))
+                    fname = fname.replace("{folder}", _folder)
                     fname = fname.replace("{samplerate}", "all")
                     fname = fname.replace("{tilt}", _tilt)
                     fname = fname.replace("{LR}", lr_val)

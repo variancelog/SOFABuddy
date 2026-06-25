@@ -17,6 +17,7 @@ tests/
 *.sofa
 .claude
 CLAUDE.md
+graphify-out/
 
 # --- OS Specific ---
 .DS_Store

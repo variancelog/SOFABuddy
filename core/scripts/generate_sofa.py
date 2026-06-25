@@ -2,10 +2,15 @@ import argparse
 import os
 import sys
 import math
-import numpy as np
-import sofar as sf
-import scipy.signal as signal
-import scipy.fft as fft
+import warnings
+# Silence requests' RequestsDependencyWarning (chardet 6.x > its supported ceiling).
+# Must precede `import sofar`, which eagerly imports requests and would otherwise
+# emit the warning before any later filter is registered.
+warnings.filterwarnings("ignore", message=r".*doesn't match a supported version.*")
+import numpy as np  # noqa: E402
+import sofar as sf  # noqa: E402
+import scipy.signal as signal  # noqa: E402
+import scipy.fft as fft  # noqa: E402
 
 # Bootstrap project root onto sys.path so core.* imports work when this script
 # is launched as a subprocess (no cwd / PYTHONPATH guarantees from the caller).
@@ -23,44 +28,6 @@ NORM_TARGET_DB = -1.0
 SPEED_OF_SOUND = 343.0 # m/s
 DEFAULT_ONSET_BUFFER = 32 # Samples of silence before the aligned impulse starts
 # =================================================
-
-def ensure_mesh2hrtf_import(m2h_path):
-    try:
-        import mesh2hrtf as m2h
-        print("[+] Mesh2HRTF library imported successfully.")
-        return m2h
-    except ImportError:
-        print(f"[i] Library not found. Adding path: {m2h_path}")
-        sys.path.append(m2h_path)
-        sys.path.append(os.path.dirname(m2h_path))
-        
-        try:
-            import mesh2hrtf as m2h
-            print("[+] Mesh2HRTF library imported successfully after path update.")
-            return m2h
-        except ImportError as e:
-            print(f"[FATAL] Could not import mesh2hrtf. Check your path.\nError: {e}")
-            sys.exit(1)
-
-def run_project_export(m2h, project_path):
-    print(f"   -> Processing: {os.path.basename(project_path)}...")
-    try:
-        m2h.output2hrtf(project_path)
-    except Exception as e:
-        print(f"[ERROR] Export failed for {project_path}: {e}")
-        sys.exit(1)
-
-def find_sofas_in_project(project_path):
-    out_dir = os.path.join(project_path, "Output2HRTF")
-    if not os.path.exists(out_dir):
-        out_dir = project_path
-        
-    candidates = [f for f in os.listdir(out_dir) if f.endswith(".sofa")]
-    if not candidates:
-        print(f"[ERROR] No SOFA files found in {out_dir}")
-        sys.exit(1)
-    
-    return [os.path.join(out_dir, c) for c in candidates if "HRIR" in c]
 
 def find_global_onset(hrirs, threshold_ratio):
     """Finds the absolute first sample where energy crosses the threshold."""
@@ -180,7 +147,7 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     H_raw = fft.rfft(hrirs, n=N, axis=-1)
     freqs = fft.rfftfreq(N, 1.0 / target_fs)
 
-    # 5. Calculate Global Diffuse Field Response (Raw)
+    # 5. Calculate Weights for Diffuse Field Calculation (Raw)
     weights = calculate_geometric_weights(
         out_sofa.SourcePosition,
         advanced_dfeq=True,
@@ -192,16 +159,19 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     DF_power = np.sum(P_raw * weights_expanded, axis=0)
     DF_mag = np.sqrt(DF_power) # (R, N_bins)
     
+    # 6. Low Frequency Extension
+    # 6.a. LF Extension Parameters
     crossover_f = args.lf_crossover
     idx_xover = np.searchsorted(freqs, crossover_f)
     blend_weights = get_blend_weights(freqs, crossover_f,
                                       blend_low_oct=blend_low_oct,
                                       blend_high_oct=blend_high_oct)
-    
-    # Define Anchor Level (Level of Raw DF at crossover)
+     
+    # 6.b. Define Anchor Level (Level of Raw DF at LF extension crossover)
     anchor_level = np.mean(DF_mag[:, max(0, idx_xover-2):idx_xover+3], axis=-1, keepdims=True)
     
-    # 6. Step A: Define the Unified Target Response
+       
+    # 6.c. Define the Unified Target Response
     # Default target: flat at anchor_level
     target_response = np.ones_like(DF_mag) * anchor_level
     
@@ -216,31 +186,59 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
         else:
             print(f"   [!] Skipping LF Extension: Reference file 'lf_ref_mag.txt' not found.")
 
-    # 7. Step B: Prepare Repaired/Spliced Signal
+    ##
+    # 6.d.2 Apply Minimum Phase LF Splicing
     H_rep = H_raw.copy()
-    if args.lf_extend and base_target is not None:
-        print(f"   4. Splicing Ideal LF Response (Crossover: {crossover_f} Hz)...")
+    if args.lf_extend and base_target is not None and scaled_lf_target is not None:
+        print(f"   4. Splicing Ideal LF Response (Crossover: {crossover_f} Hz using Phase Blending)...")
         
-        # Prepare Synthetic LF (Min-phase version of the scaled target)
-        # Note: We use the scaled_lf_target which is already ear-specific
-        H_synthetic = np.zeros_like(H_raw)
+        # --- A. Extract Minimum Phase and Excess Phase of Raw HRIR ---
+        mag_raw = np.abs(H_raw)
+        log_mag_raw = np.log(mag_raw + 1e-12)
+        full_log_mag_raw = np.concatenate([log_mag_raw, log_mag_raw[..., -2:0:-1]], axis=-1)
+        min_phase_raw = -np.imag(signal.hilbert(full_log_mag_raw, axis=-1))[..., :H_raw.shape[-1]]
+        
+        phase_raw = np.unwrap(np.angle(H_raw), axis=-1)
+        excess_phase = phase_raw - min_phase_raw
+        
+        H_raw_min = mag_raw * np.exp(1j * min_phase_raw)
+
+        # --- B. Create Pure Minimum-Phase Synthetic LF ---
+        H_synthetic_min = np.zeros_like(H_raw)
         for m in range(M):
             for r in range(R):
                 log_base = np.log(scaled_lf_target[r] + 1e-12)
                 full_log_base = np.concatenate([log_base, log_base[-2:0:-1]])
                 min_phase_base = -np.imag(signal.hilbert(full_log_base))[:len(base_target)]
                 
-                # Align delay to raw phase at crossover
-                phase_raw = np.unwrap(np.angle(H_raw[m, r, :]))
-                phase_at_xover = np.mean(phase_raw[max(0, idx_xover-2):idx_xover+3])
-                delay = (min_phase_base[idx_xover] - phase_at_xover) / (2 * np.pi * crossover_f)
-                
-                H_synthetic[m, r, :] = scaled_lf_target[r] * np.exp(1j * (min_phase_base - 2 * np.pi * freqs * delay))
+                H_synthetic_min[m, r, :] = scaled_lf_target[r] * np.exp(1j * min_phase_base)
         
-        # Complex Splice
-        H_rep = H_synthetic * (1.0 - blend_weights) + H_raw * blend_weights
+        # --- C. Blend in the Minimum Phase Domain (Solves Comb Filtering) ---
+        H_rep_min = H_synthetic_min * (1.0 - blend_weights) + H_raw_min * blend_weights
+        
+        # --- D. Fix Time Dispersion (Blend Excess Phase) ---
+        # The raw excess phase is too chaotic at low frequencies. We replace it 
+        # with a pure linear delay matching the time-of-arrival at the crossover.
+        linear_excess_phase = np.zeros_like(excess_phase)
+        
+        for m in range(M):
+            for r in range(R):
+                # Find the true delay at the crossover point
+                ex_phase_at_xover = np.mean(excess_phase[m, r, max(0, idx_xover-2):idx_xover+3])
+                delay_sec = -ex_phase_at_xover / (2 * np.pi * crossover_f)
+                
+                # Extrapolate that delay as a pure linear phase slope for the LF
+                linear_excess_phase[m, r, :] = -2 * np.pi * freqs * delay_sec
+                
+        # Crossfade the phase: Linear delay (LF) -> True spatial phase (HF)
+        blended_excess_phase = linear_excess_phase * (1.0 - blend_weights) + excess_phase * blend_weights
+        
+        # --- E. Final Reassembly ---
+        H_rep = H_rep_min * np.exp(1j * blended_excess_phase)
+    ## End: Test pure min phase splicing
+    
 
-    # 8. Step C: Apply Unified Corrective EQ (if DFEQ is ON)
+    # 7. Step C: Apply Unified Diffuse Field EQ (if DFEQ is ON)
     H_final = H_rep
     if apply_dfeq:
         print("   5. Applying Unified Diffuse Field EQ...")
@@ -262,7 +260,7 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     else:
         print("   5. Skipping DFEQ.")
 
-    # 9. Back to Time Domain
+    # 8. Back to Time Domain
     hrirs = fft.irfft(H_final, n=N, axis=-1)
 
     # 9. Dynamic Crop & Fade
@@ -300,7 +298,7 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     # 11. Save
     out_sofa.Data_IR = hrirs.astype(np.float32)
 
-    # 9. ILD Balance — runs on the fully-assembled mastered sofar object so it
+    # 12. ILD Balance — runs on the fully-assembled mastered sofar object so it
     # applies to the final combined signal (post-EQ, post-normalize).  Guard on
     # R == 2: apply_ild_fix indexes channels 0 and 1 directly.
     if ild_fix and out_sofa.Data_IR.shape[1] == 2:
@@ -334,44 +332,10 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     sf.write_sofa(output_path, out_sofa)
     print(f"   [+] Saved {os.path.basename(output_path)}")
 
-def merge_sofas(path_l, path_r):
-    print("\n=== Merging Left and Right Projects ===")
-    l_sofa = sf.read_sofa(path_l)
-    r_sofa = sf.read_sofa(path_r)
-    
-    if l_sofa.Data_SamplingRate != r_sofa.Data_SamplingRate:
-        print("[FATAL] Sampling rates do not match!")
-        sys.exit(1)
-        
-    if l_sofa.Data_IR.shape[1] == 1 and r_sofa.Data_IR.shape[1] == 1:
-        merged_ir = np.concatenate((l_sofa.Data_IR, r_sofa.Data_IR), axis=1)
-        merged_recv_pos = np.vstack((l_sofa.ReceiverPosition, r_sofa.ReceiverPosition))
-        
-        d_l = np.atleast_2d(l_sofa.Data_Delay)
-        d_r = np.atleast_2d(r_sofa.Data_Delay)
-        if d_l.shape[0] != 1: d_l = d_l.T
-        if d_r.shape[0] != 1: d_r = d_r.T
-            
-        merged_delay = np.concatenate((d_l, d_r), axis=1)
-        
-        merged = l_sofa.copy()
-        merged.Data_IR = merged_ir
-        merged.ReceiverPosition = merged_recv_pos
-        merged.Data_Delay = merged_delay
-        merged.GLOBAL_Title = "Merged HRTF (Mastered)"
-        return merged
-    else:
-        print("[FATAL] Input SOFAs already have multiple receivers.")
-        sys.exit(1)
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--left", required=False)
-    parser.add_argument("--right", required=False)
-    parser.add_argument("--m2h_path", required=False)
-    parser.add_argument("--input", required=False)
+    parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--only-48k", action="store_true")
     parser.add_argument("--dfeq", action="store_true", default=None)
     
     parser.add_argument("--target-fs", type=int, help="Explicit target samplerate (Hz) for standalone mode")
@@ -415,44 +379,14 @@ def main():
     args = parser.parse_args()
 
     targets = []
-    if args.input:
-        print("=== Standalone Mode: Mastering Single SOFA ===")
-        if not os.path.exists(args.input):
-            print(f"[ERROR] Input file missing: {args.input}")
-            sys.exit(1)
-            
-        target_sofa = sf.read_sofa(args.input)
-        base_name = os.path.splitext(os.path.basename(args.input))[0]
-        targets.append((target_sofa, base_name))
-        
-    elif args.left and args.right and args.m2h_path:
-        print("=== Orchestrator Mode: Generating and Merging ===")
-        m2h = ensure_mesh2hrtf_import(args.m2h_path)
-        run_project_export(m2h, args.left)
-        run_project_export(m2h, args.right)
-
-        sofas_l = find_sofas_in_project(args.left)
-        sofas_r = find_sofas_in_project(args.right)
-        
-        pairs = []
-        for sl in sofas_l:
-            for sr in sofas_r:
-                if os.path.basename(sl) == os.path.basename(sr):
-                    pairs.append((sl, sr, os.path.basename(sl)))
-
-        if not pairs:
-            print("[ERROR] No matching left/right SOFA pairs found.")
-            sys.exit(1)
-
-        for sl, sr, name in pairs:
-            print(f"   Merging Pair: {name}")
-            target_sofa = merge_sofas(sl, sr)
-            base_name = os.path.splitext(name)[0]
-            targets.append((target_sofa, base_name))
-        
-    else:
-        print("[ERROR] Invalid arguments. Provide either --input OR (--left, --right, --m2h_path).")
+    print("=== Standalone Mode: Mastering Single SOFA ===")
+    if not os.path.exists(args.input):
+        print(f"[ERROR] Input file missing: {args.input}")
         sys.exit(1)
+
+    target_sofa = sf.read_sofa(args.input)
+    base_name = os.path.splitext(os.path.basename(args.input))[0]
+    targets.append((target_sofa, base_name))
 
     print("\n=== Step 2: Mastering Outputs ===")
     
@@ -461,10 +395,6 @@ def main():
         # Explicit/UI mode: Just run the one requested job
         apply_dfeq = args.dfeq if args.dfeq is not None else False
         jobs = [(args.target_fs, apply_dfeq, None)]
-    elif args.only_48k:
-        # Legacy/Shortcut mode: Only 48k, No DFEQ (unless explicitly requested)
-        apply_dfeq = args.dfeq if args.dfeq is not None else False
-        jobs = [(48000, apply_dfeq, None)]
     else:
         # Standard mode
         if args.dfeq is True:

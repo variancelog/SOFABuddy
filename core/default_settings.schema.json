@@ -185,9 +185,15 @@
           ],
           "description": "Algorithm used to average the L and R DFHRTF curves when writing per-SOFA average outputs."
         },
+        "per_sofa_avg_filename": {
+          "type": "string"
+        },
         "text_filename": {
           "type": "string",
           "description": "Text output filename template. Supported variables: {folder}, {filename}, {samplerate}, {tilt}, {LR}."
+        },
+        "avg_filename": {
+          "type": "string"
         },
         "text_delimiter": {
           "enum": [
@@ -360,12 +366,6 @@
           "minimum": 0.1,
           "maximum": 10.0,
           "description": "Outlier rejection threshold in standard deviations above the median pairwise distance. Curves exceeding median + N\u00d7std are removed."
-        },
-        "outlier_gamma": {
-          "type": "number",
-          "minimum": 0.001,
-          "maximum": 10.0,
-          "description": "Soft-DTW gamma parameter used during outlier detection. Controls the softness of the distance metric (higher = smoother gradient)."
         },
         "softdtw_gamma_persofa": {
           "type": "number",
