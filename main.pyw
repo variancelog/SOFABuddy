@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 from PySide6.QtWidgets import QApplication, QSplashScreen
-from PySide6.QtGui import QPixmap, QColor, QFontDatabase
+from PySide6.QtGui import QPixmap, QFontDatabase
 from PySide6.QtCore import Qt
 
 def _load_bundled_fonts():
@@ -48,9 +48,12 @@ def main():
     """)
 
     # 1. Create and show Splash Screen immediately
-    # Using a simple colored pixmap as a placeholder for a logo
-    pixmap = QPixmap(400, 300)
-    pixmap.fill(QColor(T.SPLASH_BG))
+    splash_path = Path(__file__).resolve().parent / "ui" / "sb_splash.png"
+    pixmap = QPixmap(str(splash_path)).scaled(
+        400, 400,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
 
     splash = QSplashScreen(pixmap, Qt.WindowType.WindowStaysOnTopHint)
     splash.show()

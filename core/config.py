@@ -26,6 +26,42 @@ import tempfile
 from pathlib import Path
 
 _DEFAULTS_PATH = Path(__file__).parent / "default_settings.json"
+_SCHEMA_PATH   = Path(__file__).parent / "default_settings.schema.json"
+
+# ── JSON-schema bounds reader ─────────────────────────────────────────────────
+
+_schema_cache: dict | None = None
+
+
+def _load_json_schema() -> dict:
+    """Load + cache default_settings.schema.json.  Returns {} if unreadable."""
+    global _schema_cache
+    if _schema_cache is None:
+        try:
+            with open(_SCHEMA_PATH, "r", encoding="utf-8") as fh:
+                _schema_cache = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            _schema_cache = {}
+    return _schema_cache
+
+
+def schema_bounds(dotted_path: str, fallback: tuple = (None, None)) -> tuple:
+    """Return (minimum, maximum) for a dotted config path from the JSON schema.
+
+    Walks the nested ``properties`` tree; returns *fallback* if the path is
+    absent or the schema file cannot be read.  Safe to call at module import
+    time — the schema file is never a hard runtime dependency.
+    """
+    node = _load_json_schema()
+    for key in dotted_path.split("."):
+        props = node.get("properties") if isinstance(node, dict) else None
+        if not isinstance(props, dict) or key not in props:
+            return fallback
+        node = props[key]
+    if not isinstance(node, dict):
+        return fallback
+    return (node.get("minimum", fallback[0]), node.get("maximum", fallback[1]))
+
 
 # ── Validation schema ─────────────────────────────────────────────────────────
 # Each dotted-path key maps to a spec dict with zero or more of:
@@ -35,6 +71,11 @@ _DEFAULTS_PATH = Path(__file__).parent / "default_settings.json"
 #   min / max   : numeric range (inclusive); value is clamped, not reverted
 # A missing key in the config is silently ignored during validation (the merged
 # defaults already supplied it).
+
+# Resolve xover bounds from the schema once at import time.
+# Literals here are the fallback used only if the schema file is unreadable.
+_SOFA_XOVER   = schema_bounds("sofa.xover",   (200.0, 500.0))
+_DFHRTF_XOVER = schema_bounds("dfhrtf.xover", (200.0, 500.0))
 
 SCHEMA: dict[str, dict] = {
     # -- output --
@@ -50,7 +91,7 @@ SCHEMA: dict[str, dict] = {
     "sofa.phase_mode":          {"type": str,
                                   "choices": ["Original Phase"]},
     "sofa.lf_extension":        {"type": bool},
-    "sofa.xover":               {"type": float, "min": 200.0, "max": 500.0},
+    "sofa.xover":               {"type": float, "min": _SOFA_XOVER[0],   "max": _SOFA_XOVER[1]},
     "sofa.uneq":                {"type": bool},
     "sofa.dfeq":                {"type": bool},
     "sofa.normalize_distance":  {"type": bool},
@@ -94,7 +135,7 @@ SCHEMA: dict[str, dict] = {
                                     "choices": [3, 6, 12, 24, 48]},
     "dfhrtf.tilt":                {"type": float, "min": -2.0, "max": 1.0},
     "dfhrtf.extend_lf":           {"type": bool},
-    "dfhrtf.xover":               {"type": float, "min": 200.0, "max": 500.0},
+    "dfhrtf.xover":               {"type": float, "min": _DFHRTF_XOVER[0], "max": _DFHRTF_XOVER[1]},
     "dfhrtf.avg_all":             {"type": bool},
     "dfhrtf.algo":                {"type": str,
                                     "choices": ["Arithmetic Mean", "Geo-Arc-Length", "Soft-DTW"]},

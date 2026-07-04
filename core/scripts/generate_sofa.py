@@ -20,6 +20,7 @@ from core.geometry_weights import (  # noqa: E402
     get_dominant_radius,
     calculate_geometric_weights,
 )
+from core.sofa_io import read_sofa_robust  # noqa: E402
 
 # ================= R2 CONFIGURATION =================
 PROCESSING_LENGTH = 2048
@@ -28,6 +29,7 @@ NORM_TARGET_DB = -1.0
 SPEED_OF_SOUND = 343.0 # m/s
 DEFAULT_ONSET_BUFFER = 32 # Samples of silence before the aligned impulse starts
 # =================================================
+
 
 def find_global_onset(hrirs, threshold_ratio):
     """Finds the absolute first sample where energy crosses the threshold."""
@@ -384,7 +386,7 @@ def main():
         print(f"[ERROR] Input file missing: {args.input}")
         sys.exit(1)
 
-    target_sofa = sf.read_sofa(args.input)
+    target_sofa = read_sofa_robust(args.input)
     base_name = os.path.splitext(os.path.basename(args.input))[0]
     targets.append((target_sofa, base_name))
 

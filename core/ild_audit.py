@@ -76,9 +76,10 @@ def diffuse_field_ild(sofa_or_path, weighting_mode="auto", estimate_band=ESTIMAT
     """
     import sofar as sf  # optional dep — only required when this function is called
     from core.geometry_weights import calculate_geometric_weights
+    from core.sofa_io import read_sofa_robust
 
     if isinstance(sofa_or_path, str):
-        sofa = sf.read_sofa(sofa_or_path)
+        sofa = read_sofa_robust(sofa_or_path)
     else:
         sofa = sofa_or_path
 

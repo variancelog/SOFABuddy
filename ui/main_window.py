@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QPlainTextEdit, QSplitter, QFileDialog
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QIcon
+from pathlib import Path
 from ui.tabs import FilesTab, SofaTab, DfhrtfTab
 from ui.widgets import FlameLabel, FlameToggleButton, FlameLineEdit
 from ui.workers import ProcessingWorker
@@ -19,6 +20,7 @@ class SofaBuddyMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SOFA Buddy v0.2.0")
+        self.setWindowIcon(QIcon(str(Path(__file__).parent / "sb_icon.png")))
         self.resize(800, 600)
         self.setStyleSheet(f"background-color: {T.BG_BASE};")
 

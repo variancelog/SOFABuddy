@@ -21,6 +21,7 @@ from core.geometry_weights import (  # noqa: E402
     get_dominant_radius,
     calculate_geometric_weights,
 )
+from core.sofa_io import read_sofa_robust  # noqa: E402
 
 # Marker area (pts²) for the weighted-grid plot.  Size is constant so that
 # comparisons across files differ only in color, not marker footprint.
@@ -193,7 +194,7 @@ def main():
         sys.exit(1)
 
     # 1. Load Data
-    sofa = sf.read_sofa(args.input)
+    sofa = read_sofa_robust(args.input)
     hrirs = sofa.Data_IR
     fs = float(sofa.Data_SamplingRate)
 

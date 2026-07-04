@@ -6,6 +6,7 @@ from PySide6.QtCore import Signal, Qt
 from ui.widgets import FlameToggleButton, FlameDropdown, FlameNumericSlider, FlameLabel, FlameLineEdit
 from ui.theme import BG_WIDGET, BG_CONTROL, ACCENT, FG, CONTROL_HEIGHT
 from core.sofa_utils import get_sofa_metadata, calculate_max_itd, calculate_grid_radius, get_grid_cartesian
+from core.config import schema_bounds
 
 
 class _FilePathItem(QListWidgetItem):
@@ -411,7 +412,8 @@ class SofaTab(QWidget):
         lf_xover_layout = QHBoxLayout()
         self.btn_lf = FlameToggleButton("Extend LF")
         self.btn_lf.setToolTip("<p>Replaces HRIR magnitudes below the crossover frequency with an 'ideal' frequency response. Recommended for most measured SOFAs.</p>")
-        self.slider_xover = FlameNumericSlider("Crossover Hz", 200.0, 500.0, 5.0, 375.0)
+        _xmin, _xmax = schema_bounds("sofa.xover", (200.0, 500.0))
+        self.slider_xover = FlameNumericSlider("Crossover Hz", _xmin, _xmax, 5.0, 375.0)
         self.slider_xover.setToolTip("<p>Crossover frequency for Extend LF function. 375Hz works best in most cases.</p>")
         self.btn_lf.toggled.connect(self.slider_xover.setEnabled)
         self.slider_xover.setEnabled(False)
@@ -641,7 +643,8 @@ class DfhrtfTab(QWidget):
 
         self.btn_extend_lf = FlameToggleButton("Extend LF")
         self.btn_extend_lf.setToolTip("<p>Extend and linerizes low frequency (LF) response below the crossover frequency. Not needed for simulated SOFA files or if Extend LF already applied to measured SOFA files.</p>")
-        self.slider_xover = FlameNumericSlider("Crossover Hz", 200.0, 500.0, 5.0, 375.0)
+        _xmin, _xmax = schema_bounds("dfhrtf.xover", (200.0, 500.0))
+        self.slider_xover = FlameNumericSlider("Crossover Hz", _xmin, _xmax, 5.0, 375.0)
         self.slider_xover.setToolTip("<p>Crossover frequency for low frequency extenstion.</p>")
 
         # --- Post Processing Section ---

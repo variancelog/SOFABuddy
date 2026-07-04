@@ -28,12 +28,13 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
 
     # Unpack averaging params with the historically-correct runtime defaults
     p = avg_params or {}
-    num_points       = int(p.get('num_points', 512))
-    threshold_std    = float(p.get('outlier_threshold_std', 1.0))
-    softdtw_gamma    = float(p.get('softdtw_gamma_global', 0.03))
-    softdtw_max_iter = int(p.get('softdtw_max_iter', 25))
-    softdtw_tol      = float(p.get('softdtw_tol', 0.001))
-    geo_arc_y_scale  = float(p.get('geo_arc_y_scale', 0.01))
+    num_points            = int(p.get('num_points', 512))
+    output_octave_fraction = int(p.get('output_octave_fraction', 48))
+    threshold_std         = float(p.get('outlier_threshold_std', 1.0))
+    softdtw_gamma         = float(p.get('softdtw_gamma_global', 0.03))
+    softdtw_max_iter      = int(p.get('softdtw_max_iter', 25))
+    softdtw_tol           = float(p.get('softdtw_tol', 0.001))
+    geo_arc_y_scale       = float(p.get('geo_arc_y_scale', 0.01))
 
     try:
         log_callback(f"Averaging {len(file_list)} files using {algo_name}...")
@@ -46,7 +47,9 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
 
         # 2. Interpolate to common axis
         if stop_checker and stop_checker(): return
-        interp_data = CommonAxisInterpolator.interpolate_to_common_axis(dfs, num_points=num_points)
+        interp_data = CommonAxisInterpolator.interpolate_to_common_axis(
+            dfs, num_points=num_points, octave_fraction=output_octave_fraction
+        )
         common_freqs = interp_data['common_freqs']
         norm_freqs   = interp_data['norm_freqs']
         norm_mags_2d = interp_data['norm_mags_2d']
@@ -99,6 +102,7 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
                 ffile.write(f"{f:.6f}{delimiter}{m:.3f}\n")
 
         log_callback(f" [+] Saved Global Average: {os.path.basename(output_path)}")
+        return common_freqs, avg_db
 
     except Exception as e:
         log_callback(f" [!] Averaging Error: {str(e)}")
@@ -132,6 +136,13 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         delim_map = {"Tab": "\t", "Comma": ",", "Semicolon": ";", "Space": " "}
         delim = delim_map.get(df_cfg.get('text_delimiter', "Tab"), "\t")
         avg_params = config.get('averaging', {})
+        # Inject the per-SOFA output resolution so the averaging pipeline uses the
+        # same fractional-octave grid as generate_dfhrtf.py, keeping both file
+        # types at identical point counts and frequency axis values.
+        avg_params = {
+            **avg_params,
+            'output_octave_fraction': int(df_cfg.get('advanced', {}).get('output_octave_fraction', 48)),
+        }
 
         # Format tilt as one decimal place for use in filename templates
         tilt_str = f"{float(df_cfg.get('tilt', 0.0)):.1f}"
@@ -327,6 +338,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             ext = f".{df_cfg.get('text_extension', 'txt')}"
             short_algo = {"Arithmetic Mean": "arithmean", "Geo-Arc-Length": "geoarc", "Soft-DTW": "softdtw"}.get(algo, "softdtw")
             avg_template = df_cfg.get('avg_filename', "{folder} avg {LR}")
+            avg_graph_template = df_cfg.get('avg_graph_filename', "{folder} avg")
 
             for out_dir, grp in groups.items():
                 if not grp['l']:
@@ -347,11 +359,28 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                     if not fname.endswith(_ext): fname += _ext
                     return os.path.join(_dir, fname)
 
-                run_averaging(grp['l'], algo, exclude, get_avg_path("L"), delim,
-                              log_callback, stop_checker, avg_params=avg_params)
+                res_l = run_averaging(grp['l'], algo, exclude, get_avg_path("L"), delim,
+                                      log_callback, stop_checker, avg_params=avg_params)
                 if stop_checker and stop_checker(): return False
-                run_averaging(grp['r'], algo, exclude, get_avg_path("R"), delim,
-                              log_callback, stop_checker, avg_params=avg_params)
+                res_r = run_averaging(grp['r'], algo, exclude, get_avg_path("R"), delim,
+                                      log_callback, stop_checker, avg_params=avg_params)
+
+                if df_cfg.get('dfhrtf_graphs') and res_l and res_r:
+                    try:
+                        from core.plotting import plot_diffuse_field
+                        gext = f".{df_cfg.get('graph_extension', 'png')}"
+                        gname = (avg_graph_template
+                                 .replace("{folder}", grp['folder'])
+                                 .replace("{tilt}", tilt_str)
+                                 .replace("{graphtype}", "df"))
+                        if not gname.endswith(gext): gname += gext
+                        freqs_l, db_l = res_l
+                        _, db_r = res_r
+                        plot_diffuse_field(freqs_l, db_l, db_r,
+                                           os.path.join(out_dir, gname), tilt_str)
+                        log_callback(f" [+] Saved Average Graph: {gname}")
+                    except Exception as e:
+                        log_callback(f" [!] Average Graph Error: {str(e)}")
 
         return True
 

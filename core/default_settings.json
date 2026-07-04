@@ -53,6 +53,7 @@
     "algo": "Soft-DTW",
     "exclude_outliers": true,
     "avg_filename": "{folder} avg {LR}",
+    "avg_graph_filename": "{folder} avg",
     "advanced": {
       "n_fft": 16384,
       "output_octave_fraction": 48,
@@ -69,7 +70,7 @@
   },
   "averaging": {
     "num_points": 1024,
-    "outlier_threshold_std": 0.9,
+    "outlier_threshold_std": 0.85,
     "softdtw_gamma_persofa": 0.06,
     "softdtw_gamma_global": 0.06,
     "softdtw_max_iter": 15,

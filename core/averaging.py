@@ -35,6 +35,24 @@ def _softdtw_func(Z, X, weights, barycenter_shape, gamma, progress_queue=None, s
             
     return obj, G.ravel()
 
+# --- Grid Helpers ---
+
+def _fractional_octave_grid(min_freq, max_freq, fraction):
+    """Generate a 1/N-octave log-spaced grid from min_freq up to max_freq.
+
+    Mirrors the generate_fractional_octave_frequencies() logic used by
+    generate_dfhrtf.py so that averaging output files share the same frequency
+    axis as the per-SOFA text files.
+    """
+    freqs = []
+    f = float(min_freq)
+    step = 2.0 ** (1.0 / int(fraction))
+    # Small tolerance avoids dropping the last point due to float rounding
+    while f <= float(max_freq) + 1e-6:
+        freqs.append(f)
+        f *= step
+    return np.array(freqs)
+
 # --- Main Classes ---
 
 class DataIngestor:
@@ -85,10 +103,14 @@ class DataIngestor:
 
 class CommonAxisInterpolator:
     @staticmethod
-    def interpolate_to_common_axis(dataframes: List[pd.DataFrame], num_points: int = 512) -> Dict:
+    def interpolate_to_common_axis(dataframes: List[pd.DataFrame], num_points: int = 512, octave_fraction: int = None) -> Dict:
         """
         Takes a list of dataframes and maps them to a rigid common frequency axis.
         Normalizes both axes (log-frequency and magnitude) to [0.0, 1.0] before returning.
+
+        When octave_fraction is provided the common axis uses 1/N-octave spacing
+        (matching the per-SOFA text file grid); otherwise falls back to a
+        num_points log-spaced grid.
         """
         if not dataframes:
             return {}
@@ -108,7 +130,11 @@ class CommonAxisInterpolator:
             global_min_freq = 1e-10
             
         # Create common rigid logarithmic frequency grid
-        common_freqs = np.logspace(np.log10(global_min_freq), np.log10(global_max_freq), num_points)
+        if octave_fraction is not None:
+            # Use fractional-octave spacing so the axis matches the per-SOFA text files
+            common_freqs = _fractional_octave_grid(global_min_freq, global_max_freq, octave_fraction)
+        else:
+            common_freqs = np.logspace(np.log10(global_min_freq), np.log10(global_max_freq), num_points)
         
         interpolated_mags = []
         for df in dataframes:

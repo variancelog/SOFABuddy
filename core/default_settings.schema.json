@@ -62,7 +62,7 @@
         "xover": {
           "type": "number",
           "minimum": 200.0,
-          "maximum": 500.0,
+          "maximum": 700.0,
           "description": "Crossover frequency (Hz) for LF extension blending. The synthetic LF signal is spliced in below this frequency; blend width is controlled by advanced.blend_low_oct / blend_high_oct."
         },
         "uneq": {
@@ -195,6 +195,10 @@
         "avg_filename": {
           "type": "string"
         },
+        "avg_graph_filename": {
+          "type": "string",
+          "description": "Average DFHRTF graph filename template. Supported variables: {folder}, {tilt}, {graphtype}."
+        },
         "text_delimiter": {
           "enum": [
             "Tab",
@@ -267,7 +271,7 @@
         "xover": {
           "type": "number",
           "minimum": 200.0,
-          "maximum": 500.0,
+          "maximum": 700.0,
           "description": "Crossover frequency (Hz) for DFHRTF LF extension blending."
         },
         "avg_all": {
