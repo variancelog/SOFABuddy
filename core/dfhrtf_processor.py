@@ -221,7 +221,10 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             dfhrtf_adv = df_cfg.get('advanced', {})
 
             cmd = [sys.executable, "-u", script_dfhrtf, "--input", input_path]
-            cmd.extend(["--smoothing", str(df_cfg.get('smoothing', 48))])
+            # 'Variable' -> 'variable'; '1/24' (or legacy 24) -> '24'
+            smoothing_cfg = str(df_cfg.get('smoothing', 'Variable'))
+            smoothing_arg = 'variable' if smoothing_cfg.lower() == 'variable' else smoothing_cfg.split('/')[-1]
+            cmd.extend(["--smoothing", smoothing_arg])
             cmd.extend(["--tilt", str(df_cfg.get('tilt', 0.0))])
             if df_cfg.get('extend_lf'):
                 cmd.append("--lf_ext_dfhrtf")
@@ -242,6 +245,13 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             cmd.extend(["--grid-scale-high",        str(float(dfhrtf_adv.get('weighted_grid_scale_high', 0.003)))])
             if dfhrtf_adv.get('preserve_lr_balance', True):
                 cmd.append("--preserve-lr-balance")
+
+            cmd.extend(["--var-smooth-freq-low",  str(float(dfhrtf_adv.get('variable_smoothing_freq_low', 350.0)))])
+            cmd.extend(["--var-smooth-freq-hi",   str(float(dfhrtf_adv.get('variable_smoothing_freq_hi', 3000.0)))])
+            cmd.extend(["--var-smooth-n-low",     str(float(dfhrtf_adv.get('variable_smoothing_n_low', 1.0)))])
+            cmd.extend(["--var-smooth-n-hi",      str(float(dfhrtf_adv.get('variable_smoothing_n_hi', 12.0)))])
+            cmd.extend(["--var-smooth-gamma",     str(float(dfhrtf_adv.get('variable_smoothing_gamma', 0.88)))])
+            cmd.extend(["--var-smooth-mean-mode", str(dfhrtf_adv.get('variable_smoothing_mean_mode', 'db')).lower()])
 
             cmd.extend(["--delimiter", delim])
 

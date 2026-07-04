@@ -9,8 +9,8 @@
     "enabled": false,
     "samplerates": [48000],
     "phase_mode": "Original Phase",
-    "lf_extension": false,
-    "xover": 375.0,
+    "lf_extension": true,
+    "xover": 400.0,
     "uneq": true,
     "dfeq": true,
     "normalize_distance": true,
@@ -18,7 +18,7 @@
     "hrir_length": 512,
     "ild_fix": true,
     "ild_threshold": 1.4,
-    "naming": "{filename}-n {samplerate} {eq}",
+    "naming": "{filename} {samplerate} {eq}",
     "advanced": {
       "processing_length": 2048,
       "norm_target_db": -1.0,
@@ -43,14 +43,14 @@
     "weighting_mode": "Auto",
     "weighted_grid": true,
     "weighted_grid_scope": "Per Folder",
-    "graph_filename": "{graphtype} {folder} {filename}",
+    "graph_filename": "{graphtype} {filename}",
     "graph_extension": "png",
-    "smoothing": 24,
+    "smoothing": "Variable",
     "tilt": 0.0,
     "extend_lf": false,
-    "xover": 375.0,
+    "xover": 400.0,
     "avg_all": false,
-    "algo": "Soft-DTW",
+    "algo": "Geo-Arc-Length",
     "exclude_outliers": true,
     "avg_filename": "{folder} avg {LR}",
     "avg_graph_filename": "{folder} avg",
@@ -65,7 +65,14 @@
       "weighted_grid_scale_mode": "manual",
       "weighted_grid_scale_low": 0.0001,
       "weighted_grid_scale_high": 0.0025,
-      "preserve_lr_balance": true
+      "preserve_lr_balance": true,
+
+      "variable_smoothing_freq_low": 350.0,
+      "variable_smoothing_freq_hi": 3000.0,
+      "variable_smoothing_n_low": 1.0,
+      "variable_smoothing_n_hi": 12.0,
+      "variable_smoothing_gamma": 0.88,
+      "variable_smoothing_mean_mode": "db"
     }
   },
   "averaging": {
@@ -75,6 +82,6 @@
     "softdtw_gamma_global": 0.06,
     "softdtw_max_iter": 15,
     "softdtw_tol": 0.0015,
-    "geo_arc_y_scale": 0.01
+    "geo_arc_y_scale": 0.02
   }
 }

@@ -6,15 +6,16 @@ A desktop GUI for mastering SOFA HRTF files and extracting diffuse-field HRTF (D
 
 ## Screenshots
 
-![Files Tab](SofaBuddy_Tab1_Files.png)
-![SOFA Tab](SofaBuddy_Tab2_SOFA.png)
-![DFHRTF Tab](SofaBuddy_Tab3_DFHRTF.png)
+![Files Tab](SofaBuddy_Tab1_Files_v2.png)
+![SOFA Tab](SofaBuddy_Tab2_SOFA_v2.png)
+![DFHRTF Tab](SofaBuddy_Tab3_DFHRTF_v2.png)
 
 ## Features
 
 - **Two-stage processing pipeline**: SOFA mastering (resample, LF extension, DF equalization, radius normalization, crop/window to target length) → DFHRTF extraction (smoothed magnitude curves and plots)
 - **Multiple samplerates** in one run: 44.1 kHz, 48 kHz, 96 kHz
-- **Geometry-weighted diffuse-field calculation** using convex-hull solid-angle weights (accounts for hemispherical measurement grids missing lower elevatins)
+- **Geometry-weighted diffuse-field calculation** using convex-hull solid-angle weights (accounts for hemispherical measurement grids missing lower elevations)
+- **Variable smoothing** (default): frequency-dependent Gaussian smoothing in log-frequency space, transitioning from 1-octave bandwidth at low frequencies to 1/12-octave at high frequencies (REW-psychoacoustic style); fixed 1/3–1/48-octave smoothing also available
 - **Three averaging algorithms** for global and per-SOFA averages: Arithmetic Mean, Geo-Arc-Length, and Soft-DTW barycenter
 - **Outlier exclusion** filters anomalous curves before averaging
 - **Grid visualization**: inspect measurement grids as 3D scatter plots; export solid-angle weight maps
@@ -106,10 +107,12 @@ Controls DFHRTF extraction and averaging. Toggle **DFHRTF Outputs** on to enable
 
 | Setting | Description |
 |---|---|
-| Smooth 1/n Oct | Octave-fraction smoothing: 3, 6, 12, 24, or 48 |
+| Smoothing | **Variable** (default): frequency-dependent smoothing — heavy (1-octave) at low frequencies easing to light (1/12-octave) at high frequencies; or a fixed fraction: 1/3, 1/6, 1/12, 1/24, or 1/48 octave |
 | Tilt dB/Oct | Spectral tilt centered at 1 kHz (range −2 to +1 dB/oct) |
 | Extend LF | Linearize sub-crossover frequency response |
-| Crossover Hz | Transition frequency for LF extension (default 375 Hz) |
+| Crossover Hz | Transition frequency for LF extension (default 400 Hz) |
+
+Variable smoothing's anchor frequencies, octave fractions, transition warp, and window-average mode are tunable in `user_settings.json` under the `dfhrtf.advanced.variable_smoothing_*` keys (defaults: 1/1 octave at/below 350 Hz → 1/12 octave at/above 3 kHz, gamma 0.88, dB-domain mean).
 
 **Post Processing — global averaging**
 
@@ -126,12 +129,14 @@ With **Default** output mode and the default naming templates:
 ```
 <source folder>/
 ├── sofa_mastered/
-│   └── so_<folder>_<name>_<samplerate>_<eq>.sofa
+│   └── <name> <samplerate> <eq>.sofa
 └── DFHRTF/
-    ├── gr_<folder>_<name>_L.txt
-    ├── gr_<folder>_<name>_R.txt
-    ├── tx_<folder>_<name>_df.png
-    └── dfhrtfs_avg_<algo>.txt     ← global average for this folder
+    ├── <name> L.txt
+    ├── <name> R.txt
+    ├── df <name>.png
+    ├── stereo <name>.png
+    ├── weighted <name>.png
+    └── <folder> avg L.txt / <folder> avg R.txt    ← global average for this folder
 ```
 
 With **Custom** output mode the same structure lands under the chosen root and one global average spans all files.
@@ -171,7 +176,8 @@ Three algorithms are available for both **global averages** (Post Processing) an
 
 **Weighted Grid** (DFHRTF tab) saves a plot of the solid-angle-weighted grid used in the DFHRTF calculation — node color encodes each node's relative solid-angle weight (uniform node size). Use **Per Folder** scope for one representative plot per source folder, or **All Files** for a plot per SOFA file.
 
-![Measurement grid (raw)](grid_original.png)
+![Measurement grid (raw)](plot_grid_raw.png)
+![Measurement grid (weighted)](plot_grid_weighted.png)
 
 ## Settings and Persistence
 

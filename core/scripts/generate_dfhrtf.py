@@ -22,6 +22,7 @@ from core.geometry_weights import (  # noqa: E402
     calculate_geometric_weights,
 )
 from core.sofa_io import read_sofa_robust  # noqa: E402
+from core.smoothing import SmoothingParams, variable_smooth  # noqa: E402
 
 # Marker area (pts²) for the weighted-grid plot.  Size is constant so that
 # comparisons across files differ only in color, not marker footprint.
@@ -73,6 +74,36 @@ def apply_smoothing(freqs, mags, fraction=24):
         else:
             smoothed[i] = mags[i]
     return smoothed
+
+def make_smoother(args):
+    """Return a smooth_fn(freqs, mags_db) for the selected --smoothing mode.
+
+    'variable' uses core.smoothing.variable_smooth (frequency-dependent
+    bandwidth); any integer string uses the fixed 1/N-octave apply_smoothing.
+    """
+    if str(args.smoothing).lower() == "variable":
+        params = SmoothingParams(
+            freq_low=args.var_smooth_freq_low,
+            freq_hi=args.var_smooth_freq_hi,
+            n_low=args.var_smooth_n_low,
+            n_hi=args.var_smooth_n_hi,
+            gamma=args.var_smooth_gamma,
+            mean_mode=args.var_smooth_mean_mode,
+        )
+
+        def smooth_fn(freqs, mags):
+            # variable_smooth needs positive frequencies (log2 axis); the DC
+            # bin of an rfftfreq grid passes through unchanged.
+            out = np.array(mags, dtype=float, copy=True)
+            pos = freqs > 0
+            out[pos] = variable_smooth(freqs[pos], out[pos], params)
+            return out
+
+        return smooth_fn, "Variable Smoothing"
+
+    fraction = int(args.smoothing)
+    return (lambda freqs, mags: apply_smoothing(freqs, mags, fraction=fraction),
+            f"1/{fraction} Octave Smoothing")
 
 def save_text_data(filename, freqs, mag, delimiter="\t"):
     """Saves magnitude data with custom delimiter. Includes header for CSVs."""
@@ -153,7 +184,8 @@ def main():
     parser.add_argument("--delimiter", default="\t", help="Delimiter for text outputs")
     
     # Refinement Parameters
-    parser.add_argument("--smoothing", type=int, default=48, help="Smoothing fraction (e.g. 24 for 1/24th octave)")
+    parser.add_argument("--smoothing", type=str, default="variable",
+                        help="'variable' for frequency-dependent smoothing, or an integer N for fixed 1/N-octave smoothing")
     parser.add_argument("--tilt", type=float, default=0.0, help="Spectral Tilt (dB/oct)")
     parser.add_argument("--lr-avg-gamma", type=float, default=0.01, help="Soft-DTW gamma for per-SOFA L/R average")
     parser.add_argument("--lf_ext_dfhrtf", action="store_true", help="Enable Low Frequency extension using reference file")
@@ -172,6 +204,20 @@ def main():
                         help="Octaves above crossover for LF extension crossfade end")
     parser.add_argument("--stereo-angle",            type=float, default=30.0,
                         help="Azimuth angle (degrees) for stereo graph L/R measurement")
+
+    # Variable smoothing tunables (used when --smoothing variable)
+    parser.add_argument("--var-smooth-freq-low",  type=float, default=350.0,
+                        help="Frequency (Hz) at/below which smoothing is fixed at 1/n_low octave")
+    parser.add_argument("--var-smooth-freq-hi",   type=float, default=3000.0,
+                        help="Frequency (Hz) at/above which smoothing is fixed at 1/n_hi octave")
+    parser.add_argument("--var-smooth-n-low",     type=float, default=1.0,
+                        help="Octave-fraction denominator at freq_low (1 = full octave)")
+    parser.add_argument("--var-smooth-n-hi",      type=float, default=12.0,
+                        help="Octave-fraction denominator at freq_hi")
+    parser.add_argument("--var-smooth-gamma",     type=float, default=0.88,
+                        help="Warp of the transition midpoint (1.0 = linear in log-frequency)")
+    parser.add_argument("--var-smooth-mean-mode", choices=["db", "cubic"], default="db",
+                        help="Window average: 'db' (favors nulls) or 'cubic' REW-style (favors peaks)")
     
     parser.add_argument("--advanced-dfeq", action="store_true", default=True, help="Use advanced data sanitization")
     parser.add_argument("--weighting-mode", default="auto", choices=["auto", "geometric", "uniform"],
@@ -228,9 +274,10 @@ def main():
     target_freqs = generate_fractional_octave_frequencies(20, 20000,
                                                           fraction=args.output_octave_fraction)
 
-    print(f"   -> Applying 1/{args.smoothing} Octave Smoothing...")
-    smoothed_l = apply_smoothing(fft_freqs, avg_db[0], fraction=args.smoothing)
-    smoothed_r = apply_smoothing(fft_freqs, avg_db[1], fraction=args.smoothing)
+    smooth_fn, smoothing_label = make_smoother(args)
+    print(f"   -> Applying {smoothing_label}...")
+    smoothed_l = smooth_fn(fft_freqs, avg_db[0])
+    smoothed_r = smooth_fn(fft_freqs, avg_db[1])
 
     val_l = np.interp(target_freqs, fft_freqs, smoothed_l)
     val_r = np.interp(target_freqs, fft_freqs, smoothed_r)
@@ -328,12 +375,12 @@ def main():
 
         # Process L Ear
         mag_30L = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30L, 0, :], n=n_fft)) + 1e-12)
-        smooth_30L = apply_smoothing(fft_freqs, mag_30L, fraction=args.smoothing)
+        smooth_30L = smooth_fn(fft_freqs, mag_30L)
         val_30L = np.interp(target_freqs, fft_freqs, smooth_30L)
 
         # Process R Ear
         mag_30R = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30R, 1, :], n=n_fft)) + 1e-12)
-        smooth_30R = apply_smoothing(fft_freqs, mag_30R, fraction=args.smoothing)
+        smooth_30R = smooth_fn(fft_freqs, mag_30R)
         val_30R = np.interp(target_freqs, fft_freqs, smooth_30R)
 
         # Normalize — shared reference preserves the stereo pair's ILD

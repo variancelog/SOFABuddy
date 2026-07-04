@@ -178,9 +178,15 @@ DESCRIPTIONS: dict[str, str] = {
     "dfhrtf.graph_extension": (
         "Image format for graph output files."
     ),
+    "dfhrtf.avg_graph_filename": (
+        "Average DFHRTF graph filename template. Supported variables: "
+        "{folder}, {tilt}, {graphtype}."
+    ),
     "dfhrtf.smoothing": (
-        "Fractional-octave smoothing bandwidth applied to the DFHRTF magnitude "
-        "curve (e.g. 24 = 1/24-octave smoothing)."
+        "Smoothing applied to the DFHRTF magnitude curve. 'Variable' uses "
+        "frequency-dependent Gaussian smoothing in log-frequency space, tunable "
+        "via the advanced.variable_smoothing_* keys; '1/N' applies a fixed "
+        "1/N-octave moving average."
     ),
     "dfhrtf.tilt": (
         "Spectral tilt applied to the DFHRTF output in dB/octave. Negative "
@@ -230,6 +236,32 @@ DESCRIPTIONS: dict[str, str] = {
     "dfhrtf.advanced.stereo_angle_deg": (
         "Azimuth angle (degrees) used when extracting L/R off-axis curves for "
         "stereo graph outputs."
+    ),
+    "dfhrtf.advanced.variable_smoothing_freq_low": (
+        "Variable smoothing: frequency (Hz) at/below which the bandwidth is "
+        "fixed at 1/n_low octave."
+    ),
+    "dfhrtf.advanced.variable_smoothing_freq_hi": (
+        "Variable smoothing: frequency (Hz) at/above which the bandwidth is "
+        "fixed at 1/n_hi octave."
+    ),
+    "dfhrtf.advanced.variable_smoothing_n_low": (
+        "Variable smoothing: octave-fraction denominator at freq_low "
+        "(1 = full octave, heavy smoothing)."
+    ),
+    "dfhrtf.advanced.variable_smoothing_n_hi": (
+        "Variable smoothing: octave-fraction denominator at freq_hi "
+        "(larger = lighter smoothing)."
+    ),
+    "dfhrtf.advanced.variable_smoothing_gamma": (
+        "Variable smoothing: warps the transition midpoint in log-frequency. "
+        "1.0 = linear; <1 shifts the transition toward freq_low, >1 toward "
+        "freq_hi."
+    ),
+    "dfhrtf.advanced.variable_smoothing_mean_mode": (
+        "Variable smoothing window average. 'db' averages in dB (geometric "
+        "mean of linear magnitude, favors nulls); 'cubic' uses REW's "
+        "psychoacoustic cubic mean (favors peaks)."
     ),
 
     # averaging

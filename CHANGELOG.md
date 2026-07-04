@@ -1,3 +1,27 @@
+## v0.3.0 (2026-07-04)
+
+### Added
+- **Variable smoothing** (new default for DFHRTF): frequency-dependent Gaussian smoothing in log-frequency space (`core/smoothing.py`: `SmoothingParams`, `variable_smooth()`), transitioning from 1-octave bandwidth at/below 350 Hz to 1/12-octave at/above 3 kHz. Tunable via `dfhrtf.advanced.variable_smoothing_*` keys (`freq_low`, `freq_hi`, `n_low`, `n_hi`, `gamma`, `mean_mode`). The DFHRTF tab's smoothing control is now a dropdown (`Variable`, `1/3`…`1/48`) replacing the old fixed 1/n slider.
+- **ILD correction** on the SOFA tab: a "Balance ILDs" toggle + dB threshold slider estimates diffuse-field inter-aural level difference and applies a symmetric split-level gain correction when it exceeds the threshold. Wired through `core/ild_audit.py` (`diffuse_field_ild(..., estimate_band=...)`) and new `generate_sofa.py` flags (`--ild-fix`, `--ild-threshold`, `--ild-low-freq`, `--ild-high-freq`).
+- **Robust SOFA loading** (`core/sofa_io.py`, `read_sofa_robust()`): normalizes legacy `NC_GLOBAL.`-prefixed attributes from old SOFA C++ API 1.x files (e.g. IRCAM BILI), falls back to `verify=False` when a file's non-standard custom entries fail sofar's convention check, and sanitizes known convention violations in-memory (e.g. collapsing multi-emitter positions on `SimpleFreeFieldHRIR` files). Used by both `generate_sofa.py` and `ild_audit.py`.
+- New minimum-phase LF splicing algorithm in `generate_sofa.py`: blends minimum-phase and excess-phase components separately, replacing the raw excess phase below crossover with a pure linear delay extrapolated from the crossover's time-of-arrival — fixes comb-filtering and time-dispersion artifacts from the previous complex-domain splice.
+- Files tab multi-select: extended selection across the file list, batch "Calculate" for ITD/Grid Radius across all selected files, and a multi-file "View Grid" viewer with ←/→ cycling between grids in one window. The list is now sorted by filename (full path retained for processing/tooltips).
+- App icon and splash screen image (`ui/sb_icon.png`, `ui/sb_splash.png`), replacing the placeholder colored-pixmap splash.
+- `core/plotting.py`: shared `plot_diffuse_field()` helper so averaged and per-SOFA diffuse-field graphs render with identical styling.
+- Global averaging can now interpolate onto the same fractional-octave axis used by the per-SOFA text files (`CommonAxisInterpolator.interpolate_to_common_axis(..., octave_fraction=...)`) instead of always falling back to a fixed-`num_points` log grid.
+
+### Changed
+- **Output Folder control moved** from the Files tab to a new row on the main window (above the action bar) — it's an app-level setting, not scoped to a single tab.
+- `OutlierDetector.filter_outliers()` now always uses Euclidean pairwise distance for outlier detection (dropped the Soft-DTW-gamma distance-matrix path); Soft-DTW remains available as an averaging *algorithm* downstream.
+- New defaults: SOFA `lf_extension` is now `true` (was `false`); `xover` for both SOFA and DFHRTF is `400 Hz` (was `375 Hz`); global averaging `algo` is `Geo-Arc-Length` (was `Soft-DTW`); `averaging.geo_arc_y_scale` is `0.02` (was `0.01`).
+- Simplified default filename templates: SOFA naming drops the `-n` suffix (`{filename} {samplerate} {eq}`), DFHRTF graph filename drops `{folder}` (`{graphtype} {filename}`).
+- Removed dead code from `generate_sofa.py`: the unused `mesh2hrtf` project import/export helpers and the standalone `merge_sofas` L/R-merge path, along with their now-unused `--left`/`--right`/`--m2h_path`/`--only-48k` CLI flags.
+- SOFA/DFHRTF crossover sliders now read their min/max from the JSON schema (`schema_bounds()` in `core/config.py`) instead of hardcoded UI values.
+- Updated README screenshots and docs for the new Smoothing dropdown, ILD controls, default templates, and output folder layout.
+
+### Fixed
+- `dfhrtf.avg_graph_filename` was missing from `SCHEMA` in `core/config.py`, so it wasn't type-validated/coerced like other filename templates.
+
 ## v0.2.1 (2026-06-14)
 
 ### Added

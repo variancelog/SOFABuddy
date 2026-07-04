@@ -120,6 +120,7 @@ SCHEMA: dict[str, dict] = {
     "dfhrtf.per_sofa_avg_filename": {"type": str},
     "dfhrtf.text_filename":         {"type": str},
     "dfhrtf.avg_filename":          {"type": str},
+    "dfhrtf.avg_graph_filename":    {"type": str},
     "dfhrtf.text_delimiter":      {"type": str,
                                     "choices": ["Tab", "Comma", "Semicolon", "Space"]},
     "dfhrtf.text_extension":      {"type": str, "choices": ["txt", "csv"]},
@@ -131,8 +132,8 @@ SCHEMA: dict[str, dict] = {
                                     "choices": ["Per Folder", "All Files"]},
     "dfhrtf.graph_filename":      {"type": str},
     "dfhrtf.graph_extension":     {"type": str, "choices": ["png", "jpg"]},
-    "dfhrtf.smoothing":           {"type": int,
-                                    "choices": [3, 6, 12, 24, 48]},
+    "dfhrtf.smoothing":           {"type": str,
+                                    "choices": ["Variable", "1/3", "1/6", "1/12", "1/24", "1/48"]},
     "dfhrtf.tilt":                {"type": float, "min": -2.0, "max": 1.0},
     "dfhrtf.extend_lf":           {"type": bool},
     "dfhrtf.xover":               {"type": float, "min": _DFHRTF_XOVER[0], "max": _DFHRTF_XOVER[1]},
@@ -153,6 +154,13 @@ SCHEMA: dict[str, dict] = {
     "dfhrtf.advanced.weighted_grid_scale_low":     {"type": float, "min": 0.0, "max": 1.0},
     "dfhrtf.advanced.weighted_grid_scale_high":    {"type": float, "min": 0.0, "max": 1.0},
     "dfhrtf.advanced.preserve_lr_balance":         {"type": bool},
+
+    "dfhrtf.advanced.variable_smoothing_freq_low":  {"type": float, "min": 20.0,  "max": 2000.0},
+    "dfhrtf.advanced.variable_smoothing_freq_hi":   {"type": float, "min": 500.0, "max": 20000.0},
+    "dfhrtf.advanced.variable_smoothing_n_low":     {"type": float, "min": 1.0,   "max": 48.0},
+    "dfhrtf.advanced.variable_smoothing_n_hi":      {"type": float, "min": 1.0,   "max": 48.0},
+    "dfhrtf.advanced.variable_smoothing_gamma":     {"type": float, "min": 0.1,   "max": 10.0},
+    "dfhrtf.advanced.variable_smoothing_mean_mode": {"type": str,   "choices": ["db", "cubic"]},
 
     # -- averaging --
     "averaging.num_points":            {"type": int, "min": 64, "max": 4096},

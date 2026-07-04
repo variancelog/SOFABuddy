@@ -636,8 +636,14 @@ class DfhrtfTab(QWidget):
         self.dd_graph_ext.addItems(["png", "jpg"])
 
         # --- Refinement Section ---
-        self.slider_smoothing = FlameNumericSlider("Smooth 1/n Oct", 3, 48, 1, 24, allowed_values=[3, 6, 12, 24, 48])
-        self.slider_smoothing.setToolTip("<p>Smoothing 1/n octave. Applies to both text and graph outputs.</p>")
+        self.dd_smoothing = FlameDropdown("Smoothing")
+        self.dd_smoothing.addItems(["Variable", "1/3", "1/6", "1/12", "1/24", "1/48"])
+        self.dd_smoothing.setToolTip(
+            "<p>Smoothing applied to both text and graph outputs. "
+            "'Variable' uses frequency-dependent smoothing (tunable via the "
+            "dfhrtf.advanced.variable_smoothing_* keys in the settings JSON); "
+            "'1/n' applies a fixed 1/n octave smoothing.</p>"
+        )
         self.slider_tilt = FlameNumericSlider(" Tilt dB/Oct", -2.0, 1.0, 0.1, 0.0)
         self.slider_tilt.setToolTip("<p>Tilt dB/Oct, center frequency of 1kHz. Applies to both text and graph outputs.</p>")
 
@@ -690,7 +696,7 @@ class DfhrtfTab(QWidget):
 
         grid.addWidget(FlameLabel("Refinement:"), 4, 0)
         row4 = QHBoxLayout()
-        row4.addWidget(self.slider_smoothing)
+        row4.addWidget(self.dd_smoothing)
         row4.addWidget(self.slider_tilt)
         grid.addLayout(row4, 4, 1)
 
@@ -733,7 +739,7 @@ class DfhrtfTab(QWidget):
 
         # Refinement & Post Processing
         self.dd_weighting_mode.setEnabled(any_output)
-        self.slider_smoothing.setEnabled(any_output)
+        self.dd_smoothing.setEnabled(any_output)
         self.slider_tilt.setEnabled(any_output)
         self.btn_extend_lf.setEnabled(any_output)
         self.slider_xover.setEnabled(any_output and self.btn_extend_lf.isChecked())
@@ -758,7 +764,7 @@ class DfhrtfTab(QWidget):
             'weighted_grid_scope': self.dd_weighted_scope.get_value(),
             'graph_filename': self.edit_graph_filename.text(),
             'graph_extension': self.dd_graph_ext.get_value(),
-            'smoothing': int(self.slider_smoothing.get_value()),
+            'smoothing': self.dd_smoothing.get_value(),
             'tilt': self.slider_tilt.get_value(),
             'extend_lf': self.btn_extend_lf.get_value(),
             'xover': self.slider_xover.get_value(),
@@ -783,7 +789,7 @@ class DfhrtfTab(QWidget):
         self.edit_graph_filename.setText(cfg.get('graph_filename', 'graph_{filename}_{graphtype}'))
         self.dd_graph_ext.set_value(cfg.get('graph_extension', 'png'))
 
-        self.slider_smoothing.set_value(cfg.get('smoothing', 24))
+        self.dd_smoothing.set_value(cfg.get('smoothing', 'Variable'))
         self.slider_tilt.set_value(cfg.get('tilt', 0.0))
         self.btn_extend_lf.set_value(bool(cfg.get('extend_lf', False)))
         self.slider_xover.set_value(cfg.get('xover', 375.0))
