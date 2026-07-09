@@ -295,6 +295,18 @@ DESCRIPTIONS: dict[str, str] = {
         "geometric arc-length blend algorithm. Balances frequency vs. magnitude "
         "contribution to curve distance."
     ),
+
+    # processing
+    "processing.max_workers": (
+        "Number of chunk subprocesses to run concurrently during SOFA/DFHRTF "
+        "batch processing. 0 = auto (half of the machine's CPU cores)."
+    ),
+    "processing.chunk_size": (
+        "Maximum number of files batched into a single subprocess invocation "
+        "(via a JSON manifest) to amortize interpreter/import startup cost. "
+        "The effective chunk size is clamped down further so at least "
+        "max_workers chunks exist whenever there are enough files to fill them."
+    ),
 }
 
 # Descriptions for intermediate object nodes (groups of settings)
@@ -312,6 +324,10 @@ _OBJECT_DESCRIPTIONS: dict[str, str] = {
     ),
     "averaging": (
         "Global averaging pipeline settings. Not surfaced in the UI — "
+        "edit this file directly."
+    ),
+    "processing": (
+        "Parallel/chunked batch execution settings. Not surfaced in the UI — "
         "edit this file directly."
     ),
 }

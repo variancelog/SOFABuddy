@@ -1,24 +1,34 @@
 import os
+import shutil
 import sys
+import tempfile
 
 from core.dfhrtf_processor import SOFA_MASTERED_DIR  # shared constant
-from core.subprocess_utils import new_run_log, run_task
+from core.subprocess_utils import (
+    new_run_log, run_chunks_parallel, chunk_jobs, write_manifest,
+    effective_chunk_size, blas_guarded_env,
+)
 
 def process_sofa_exports(config, progress_callback, log_callback, error_callback, stop_checker=None):
     """
     Main processing logic for SOFA exports.
-    Breaks down the UI config into individual generate_sofa.py tasks.
+    Breaks the UI config into individual per-file jobs (one per file x
+    samplerate x EQ variant), groups them into contiguous chunks, and runs
+    each chunk as one generate_sofa.py --manifest subprocess through a
+    bounded thread pool (core.subprocess_utils.run_chunks_parallel). This
+    amortizes interpreter/import startup cost across a chunk while still
+    running multiple chunks concurrently.
     """
     try:
         files = config.get('files', [])
         sofa_cfg = config.get('sofa', {})
-        
+
         if not sofa_cfg.get('enabled'):
             return True # Not an error, just nothing to do for this module
 
         scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
         script_master = os.path.join(scripts_dir, "generate_sofa.py")
-        
+
         if not os.path.exists(script_master):
             error_callback(f"Backend script not found: {script_master}")
             return False
@@ -27,6 +37,9 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
         if not files:
             return True
 
+        if stop_checker and stop_checker():
+            return False
+
         out_cfg = config.get('output', {})
         use_default = out_cfg.get('default', True)
         custom_dir = out_cfg.get('folder', '').strip()
@@ -34,8 +47,37 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
             error_callback("Output Folder: No custom folder selected. Choose a folder or switch to Default.")
             return False
 
-        # 2. Build Task List
-        tasks = []
+        # Advanced SOFA params (with historically-correct defaults). Built once
+        # as the manifest "common" section shared by every job in this run —
+        # every attribute master_sofa() reads off `args` (directly or via
+        # getattr) must be present here, since manifest mode has no argparse
+        # default fallback for values a job doesn't explicitly override.
+        sofa_adv = sofa_cfg.get('advanced', {})
+        # Weighting: driven by dfhrtf config keys so one setting governs
+        # weighting in both the SOFA mastering and DFHRTF analysis stages.
+        df_cfg = config.get('dfhrtf', {})
+
+        common = {
+            "processing_length": int(sofa_adv.get('processing_length', 2048)),
+            "norm_target_db":    float(sofa_adv.get('norm_target_db', -1.0)),
+            "onset_buffer":      int(sofa_adv.get('onset_buffer', 32)),
+            "onset_threshold":   float(sofa_adv.get('onset_threshold_ratio', 0.05)),
+            "blend_low_oct":     float(sofa_adv.get('blend_low_oct', 0.50)),
+            "blend_high_oct":    float(sofa_adv.get('blend_high_oct', 0.75)),
+            "weighting_mode":    str(df_cfg.get('weighting_mode', 'Auto')).lower(),
+            "ild_fix":           bool(sofa_cfg.get('ild_fix', True)),
+            "ild_threshold":     float(sofa_cfg.get('ild_threshold', 1.5)),
+            "ild_low_freq":      float(sofa_adv.get('ild_low_freq', 300.0)),
+            "ild_high_freq":     float(sofa_adv.get('ild_high_freq', 6000.0)),
+            "harmonize_radius":  bool(sofa_cfg.get('normalize_distance', False)),
+            "target_radius":     float(sofa_cfg.get('distance_m', 1.2)),
+            "lf_extend":         bool(sofa_cfg.get('lf_extension', False)),
+            "lf_crossover":      float(sofa_cfg.get('xover', 1000.0)),
+            "hrir_length":       int(sofa_cfg.get('hrir_length', 512)),
+        }
+
+        # 2. Build Job List
+        jobs = []  # each: {'input', 'output', 'target_fs', 'dfeq', 'desc'}
         for file_path in files:
             base_name = os.path.splitext(os.path.basename(file_path))[0]
 
@@ -43,9 +85,6 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
             base_dir = os.path.dirname(file_path) if use_default else custom_dir
             out_root = os.path.join(base_dir, SOFA_MASTERED_DIR)
             os.makedirs(out_root, exist_ok=True)
-
-            # Advanced SOFA params (with historically-correct defaults)
-            sofa_adv = sofa_cfg.get('advanced', {})
 
             for sr in sofa_cfg.get('samplerates', []):
                 eq_modes = []
@@ -65,65 +104,21 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
 
                     out_path = os.path.join(out_root, out_filename)
 
-                    cmd = [
-                        sys.executable, "-u", script_master,
-                        "--input", file_path,
-                        "--output", out_path,
-                        "--target-fs", str(sr),
-                        "--hrir-length", str(int(sofa_cfg.get('hrir_length', 512)))
-                    ]
-
-                    if dfeq_on:
-                        cmd.append("--dfeq")
-
-                    if sofa_cfg.get('lf_extension'):
-                        cmd.append("--lf-extend")
-                        cmd.extend(["--lf-crossover", str(sofa_cfg.get('xover', 375.0))])
-
-                    if sofa_cfg.get('normalize_distance'):
-                        cmd.append("--harmonize-radius")
-                        cmd.extend(["--target-radius", str(sofa_cfg.get('distance_m', 1.2))])
-
-                    # Advanced params forwarded to the subprocess
-                    cmd.extend(["--processing-length",
-                                 str(int(sofa_adv.get('processing_length', 2048)))])
-                    cmd.extend(["--norm-target-db",
-                                 str(float(sofa_adv.get('norm_target_db', -1.0)))])
-                    cmd.extend(["--onset-buffer",
-                                 str(int(sofa_adv.get('onset_buffer', 32)))])
-                    cmd.extend(["--onset-threshold",
-                                 str(float(sofa_adv.get('onset_threshold_ratio', 0.05)))])
-                    cmd.extend(["--blend-low-oct",
-                                 str(float(sofa_adv.get('blend_low_oct', 0.50)))])
-                    cmd.extend(["--blend-high-oct",
-                                 str(float(sofa_adv.get('blend_high_oct', 0.75)))])
-
-                    # Weighting: driven by dfhrtf config keys so one setting
-                    # governs weighting in both the SOFA mastering and DFHRTF
-                    # analysis stages.
-                    df_cfg = config.get('dfhrtf', {})
-                    dfhrtf_adv = df_cfg.get('advanced', {})
-                    cmd.extend(["--weighting-mode",
-                                 str(df_cfg.get('weighting_mode', 'Auto')).lower()])
-
-                    # ILD balancing (driven by sofa config keys)
-                    if sofa_cfg.get('ild_fix', True):
-                        cmd.append("--ild-fix")
-                    cmd.extend(["--ild-threshold",
-                                 str(float(sofa_cfg.get('ild_threshold', 1.5)))])
-                    cmd.extend(["--ild-low-freq",
-                                 str(float(sofa_adv.get('ild_low_freq', 300.0)))])
-                    cmd.extend(["--ild-high-freq",
-                                 str(float(sofa_adv.get('ild_high_freq', 6000.0)))])
-
-                    tasks.append({
-                        'cmd': cmd,
+                    # SOFA jobs for one input file (its SR x EQ variants) are
+                    # appended consecutively here, so contiguous chunking below
+                    # keeps them in the same chunk — that's what lets
+                    # generate_sofa.py's manifest mode read each unique input
+                    # SOFA only once.
+                    jobs.append({
+                        'input': file_path,
+                        'output': out_path,
+                        'target_fs': sr,
+                        'dfeq': dfeq_on,
                         'desc': f"{base_name} ({sr}Hz, {eq_label})",
-                        'input_path': file_path,
                     })
 
-        # 3. Execute Tasks
-        total_tasks = len(tasks)
+        # 3. Execute Jobs (chunked + parallel)
+        total_tasks = len(jobs)
         if total_tasks == 0:
             return True
 
@@ -131,39 +126,61 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
         log_path = new_run_log("sofa", log_root)
         log_callback(f"[Diagnostics log: {log_path}]")
 
-        failures = []  # list of (desc, returncode)
+        proc_cfg = config.get('processing', {})
+        raw_workers = int(proc_cfg.get('max_workers', 0) or 0)
+        max_workers = raw_workers if raw_workers > 0 else max(1, (os.cpu_count() or 2) // 2)
+        chunk_size_cfg = int(proc_cfg.get('chunk_size', 16) or 16)
+        chunk_size = effective_chunk_size(total_tasks, max_workers, chunk_size_cfg)
 
-        for i, task in enumerate(tasks):
-            if stop_checker and stop_checker():
-                return False
+        log_callback(
+            f"SOFA export: {total_tasks} file(s), {max_workers} worker(s), "
+            f"chunk size {chunk_size}."
+        )
 
-            progress_val = int((i / total_tasks) * 100)
-            progress_callback(progress_val, f"Exporting: {task['desc']}")
+        tmp_dir = tempfile.mkdtemp(prefix="sofabuddy_manifest_")
+        try:
+            chunk_specs = []
+            for i, job_chunk in enumerate(chunk_jobs(jobs, chunk_size)):
+                manifest_jobs = [
+                    {'input': j['input'], 'output': j['output'],
+                     'target_fs': j['target_fs'], 'dfeq': j['dfeq']}
+                    for j in job_chunk
+                ]
+                manifest_path = write_manifest(tmp_dir, common, manifest_jobs)
+                cmd = [sys.executable, "-u", script_master, "--manifest", manifest_path]
+                chunk_specs.append({
+                    'cmd': cmd,
+                    'desc': f"SOFA chunk {i + 1} ({len(job_chunk)} files)",
+                    'jobs': job_chunk,
+                    'input_path': job_chunk[0]['input'],
+                })
 
-            rc, _ = run_task(
-                task['cmd'],
-                task['desc'],
-                task['input_path'],
-                log_callback,
-                stop_checker,
-                log_path,
-                error_callback=error_callback,
+            failed_files, failed_chunks, was_stopped = run_chunks_parallel(
+                chunk_specs, max_workers,
+                progress_callback, log_callback, stop_checker,
+                log_path, error_callback, env=blas_guarded_env(),
             )
+        finally:
+            # A just-terminated child can still hold its manifest file open on
+            # Windows; ignore cleanup errors rather than fail the whole run.
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
-            if rc is None:
-                # stop_checker fired inside run_task
-                return False
+        if was_stopped:
+            return False
 
-            if rc != 0:
-                failures.append((task['desc'], rc))
-
-        if failures:
+        if failed_files or failed_chunks:
+            chunk_job_total = sum(
+                len(c['jobs']) for c in chunk_specs if c['desc'] in failed_chunks
+            )
+            total_failed = len(failed_files) + chunk_job_total
             error_callback(
-                f"SOFA export: {len(failures)}/{total_tasks} tasks failed "
+                f"SOFA export: {total_failed}/{total_tasks} tasks failed "
                 f"— see inline blocks above and log: {log_path}"
             )
-            for desc, rc in failures:
-                error_callback(f"  - {desc}  (exit {rc})")
+            for path, err in failed_files:
+                error_callback(f"  - {path}: {err}")
+            for desc in failed_chunks:
+                error_callback(f"  - {desc}: chunk failed before reporting per-file results")
 
         return True
 

@@ -83,5 +83,9 @@
     "softdtw_max_iter": 15,
     "softdtw_tol": 0.0015,
     "geo_arc_y_scale": 0.02
+  },
+  "processing": {
+    "max_workers": 0,
+    "chunk_size": 16
   }
 }

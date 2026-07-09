@@ -170,6 +170,10 @@ SCHEMA: dict[str, dict] = {
     "averaging.softdtw_max_iter":      {"type": int, "min": 5, "max": 200},
     "averaging.softdtw_tol":           {"type": float, "min": 1e-8, "max": 1.0},
     "averaging.geo_arc_y_scale":       {"type": float, "min": 0.0001, "max": 10.0},
+
+    # -- processing (parallel/chunked batch execution) --
+    "processing.max_workers": {"type": int, "min": 0, "max": 64},
+    "processing.chunk_size":  {"type": int, "min": 1, "max": 256},
 }
 
 
@@ -479,6 +483,7 @@ class ConfigManager:
             "sofa":     result_sofa,
             "dfhrtf":   result_dfhrtf,
             "averaging": copy.deepcopy(cached.get("averaging", {})),
+            "processing": copy.deepcopy(cached.get("processing", {})),
         }
 
 

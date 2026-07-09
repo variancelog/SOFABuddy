@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 import warnings
@@ -9,6 +10,12 @@ warnings.filterwarnings("ignore", message=r".*doesn't match a supported version.
 import numpy as np  # noqa: E402
 import sofar as sf  # noqa: E402
 import scipy.fft as fft  # noqa: E402
+import matplotlib  # noqa: E402
+# Force the non-interactive Agg backend before importing pyplot. With PySide6
+# installed, matplotlib would otherwise auto-select QtAgg and spin up Qt
+# machinery in every manifest-mode child process — tolerable for one figure
+# set per process, wasteful at 3 x chunk_size figures per process.
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import csv  # noqa: E402
 import re  # noqa: E402
@@ -169,10 +176,69 @@ def apply_lf_extension(target_freqs, val_db, ref_freqs, ref_db, xover_freq,
     combined_lin = (ref_lin * weights_ref) + (val_lin * weights_val)
     return 20 * np.log10(combined_lin + 1e-12)
 
+
+# Per-job override keys: any absent from a manifest job dict simply stays
+# unset (None on the built Namespace), which run_dfhrtf() treats as "skip
+# this output" for every one of these (all are `if args.X:`-guarded).
+_MANIFEST_JOB_OVERRIDE_KEYS = (
+    "input", "text_out_l", "text_out_r", "text_out_avg",
+    "graph_out", "graph_stereo_out", "graph_weighted_out",
+)
+
+
+def run_manifest(manifest_path):
+    """
+    Batch-process multiple DFHRTF extraction jobs from one JSON manifest:
+      {"common": {...shared flags, same dest names as the CLI...},
+       "jobs": [{"input": ..., "text_out_l": ..., "text_out_r": ...,
+                 "text_out_avg": ..., "graph_out": ..., "graph_stereo_out": ...,
+                 "graph_weighted_out": ...}, ...]}
+
+    `common` must supply every attribute run_dfhrtf() reads off `args`
+    *unconditionally* (e.g. avg_algo, which the original CLI defaulted via
+    argparse even when --avg-algo wasn't passed) — there is no argparse
+    default fallback here, since manifest mode builds the Namespace directly
+    from the dict rather than re-parsing. Per-job keys (see
+    _MANIFEST_JOB_OVERRIDE_KEYS) overlay on top of common for each job.
+
+    Each job is wrapped in try/except (including SystemExit, since
+    run_dfhrtf() calls sys.exit(1) on a missing input file — that must not
+    abort the whole manifest) so one failure doesn't stop its siblings;
+    prints a `[JOB OK]`/`[JOB FAIL]` sentinel line per job. Returns a process
+    exit code (nonzero if any job failed).
+    """
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    common = manifest.get("common", {})
+    exit_code = 0
+
+    for job in manifest.get("jobs", []):
+        job_dict = dict(common)
+        for key in _MANIFEST_JOB_OVERRIDE_KEYS:
+            job_dict[key] = job.get(key)
+        ns = argparse.Namespace(**job_dict)
+        input_path = job_dict.get("input")
+        try:
+            run_dfhrtf(ns)
+            print(f"[JOB OK] {input_path}")
+        except SystemExit as e:
+            exit_code = 1
+            print(f"[JOB FAIL] {input_path}: exit code {e.code}")
+        except Exception as e:
+            exit_code = 1
+            print(f"[JOB FAIL] {input_path}: {e}")
+
+    return exit_code
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, help="Path to input SOFA file")
-    
+    parser.add_argument("--manifest", type=str, default=None,
+                        help="Path to a JSON manifest for chunked/parallel batch processing "
+                             "(runs multiple jobs in this one process; skips --input)")
+    parser.add_argument("--input", required=False, help="Path to input SOFA file")
+
     # Explicit Outputs (UI-driven)
     parser.add_argument("--text-out-l", help="Explicit path for Left ear text output")
     parser.add_argument("--text-out-r", help="Explicit path for Right ear text output")
@@ -189,7 +255,7 @@ def main():
     parser.add_argument("--tilt", type=float, default=0.0, help="Spectral Tilt (dB/oct)")
     parser.add_argument("--lr-avg-gamma", type=float, default=0.01, help="Soft-DTW gamma for per-SOFA L/R average")
     parser.add_argument("--lf_ext_dfhrtf", action="store_true", help="Enable Low Frequency extension using reference file")
-    parser.add_argument("--lf_ext_dfhrtf_xover", type=float, default=375.0, help="Crossover frequency for LF extension")
+    parser.add_argument("--lf_ext_dfhrtf_xover", type=float, default=1000.0, help="Crossover frequency for LF extension")
 
     # Advanced tunable parameters (forwarded from dfhrtf.advanced config section)
     parser.add_argument("--n-fft",                  type=int,   default=16384,
@@ -235,6 +301,24 @@ def main():
     
     args = parser.parse_args()
 
+    if args.manifest:
+        sys.exit(run_manifest(args.manifest))
+
+    if not args.input:
+        parser.error("--input is required unless --manifest is given")
+
+    run_dfhrtf(args)
+
+
+def run_dfhrtf(args):
+    """
+    Full DFHRTF extraction pipeline for one SOFA file, reading every parameter
+    off `args` (an argparse.Namespace — either the CLI-parsed one from main(),
+    or a per-job Namespace built by run_manifest() from a manifest's common
+    dict overlaid with that job's per-file overrides). No behavior change from
+    the original inline main() body; only the wrapping changed, so this can be
+    called once per job when batching multiple files through one process.
+    """
     if not os.path.exists(args.input):
         print(f"[ERROR] Input file missing: {args.input}")
         sys.exit(1)

@@ -1,9 +1,14 @@
 import os
 import sys
 import glob
+import shutil
+import tempfile
 import numpy as np
 
-from core.subprocess_utils import new_run_log, run_task
+from core.subprocess_utils import (
+    new_run_log, run_chunks_parallel, chunk_jobs, write_manifest,
+    effective_chunk_size, blas_guarded_env,
+)
 
 # Shared folder-name constants (single definition; avoids silent drift between files)
 SOFA_MASTERED_DIR = "sofa_mastered"
@@ -110,7 +115,12 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
 def process_dfhrtf_exports(config, progress_callback, log_callback, error_callback, stop_checker=None):
     """
     Main processing logic for DFHRTF exports.
-    Analyzes SOFA files and generates text/graph data.
+    Analyzes SOFA files and generates text/graph data. Jobs are built
+    sequentially (this is where the groups/seen_grid_dirs bookkeeping decides
+    per-job output paths and which file emits the weighted grid), then
+    grouped into contiguous chunks and run as generate_dfhrtf.py --manifest
+    subprocesses through a bounded thread pool (see
+    core.subprocess_utils.run_chunks_parallel).
     """
     try:
         df_cfg = config.get('dfhrtf', {})
@@ -196,19 +206,54 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         # Track which output dirs have already received a weighted-grid plot (Per Folder scope)
         seen_grid_dirs = set()
 
-        # 3. Execution
         total_inputs = len(resolved_inputs)
         log_root = custom_dir if not use_default else os.path.dirname(files[0])
         log_path = new_run_log("dfhrtf", log_root)
         log_callback(f"[Diagnostics log: {log_path}]")
 
-        failures = []  # list of (base_name, returncode)
+        # Advanced dfhrtf params (with historically-correct defaults) — shared
+        # across every job. Manifest mode has no argparse default fallback, so
+        # this "common" dict must supply every value run_dfhrtf() reads off
+        # `args` unconditionally, including avg_algo and advanced_dfeq which
+        # the CLI path only ever got via argparse defaults.
+        dfhrtf_adv = df_cfg.get('advanced', {})
+        smoothing_cfg = str(df_cfg.get('smoothing', 'Variable'))
+        # 'Variable' -> 'variable'; '1/24' (or legacy 24) -> '24'
+        smoothing_arg = 'variable' if smoothing_cfg.lower() == 'variable' else smoothing_cfg.split('/')[-1]
 
-        for i, (input_path, base_name, sr_label, src_dir) in enumerate(resolved_inputs):
+        common = {
+            "avg_algo": df_cfg.get('per_sofa_avg_algo', 'Arithmetic Mean'),
+            "delimiter": delim,
+            "smoothing": smoothing_arg,
+            "tilt": float(df_cfg.get('tilt', 0.0)),
+            "lr_avg_gamma": float(avg_params.get('softdtw_gamma_persofa', 0.01)),
+            "lf_ext_dfhrtf": bool(df_cfg.get('extend_lf', False)),
+            "lf_ext_dfhrtf_xover": float(df_cfg.get('xover', 1000.0)),
+            "n_fft": int(dfhrtf_adv.get('n_fft', 16384)),
+            "output_octave_fraction": int(dfhrtf_adv.get('output_octave_fraction', 48)),
+            "norm_freq_hz": float(dfhrtf_adv.get('norm_freq_hz', 1000.0)),
+            "lf_blend_low_oct": float(dfhrtf_adv.get('lf_blend_low_oct', 0.50)),
+            "lf_blend_high_oct": float(dfhrtf_adv.get('lf_blend_high_oct', 1.0)),
+            "stereo_angle": float(dfhrtf_adv.get('stereo_angle_deg', 30.0)),
+            "advanced_dfeq": True,
+            "weighting_mode": str(df_cfg.get('weighting_mode', 'Auto')).lower(),
+            "grid_scale_mode": str(dfhrtf_adv.get('weighted_grid_scale_mode', 'auto')).lower(),
+            "grid_scale_low": float(dfhrtf_adv.get('weighted_grid_scale_low', 0.001)),
+            "grid_scale_high": float(dfhrtf_adv.get('weighted_grid_scale_high', 0.003)),
+            "preserve_lr_balance": bool(dfhrtf_adv.get('preserve_lr_balance', True)),
+            "var_smooth_freq_low": float(dfhrtf_adv.get('variable_smoothing_freq_low', 350.0)),
+            "var_smooth_freq_hi": float(dfhrtf_adv.get('variable_smoothing_freq_hi', 3000.0)),
+            "var_smooth_n_low": float(dfhrtf_adv.get('variable_smoothing_n_low', 1.0)),
+            "var_smooth_n_hi": float(dfhrtf_adv.get('variable_smoothing_n_hi', 12.0)),
+            "var_smooth_gamma": float(dfhrtf_adv.get('variable_smoothing_gamma', 0.88)),
+            "var_smooth_mean_mode": str(dfhrtf_adv.get('variable_smoothing_mean_mode', 'db')).lower(),
+        }
+
+        # 3. Build Job List (sequential — no subprocesses, so groups/
+        # seen_grid_dirs bookkeeping needs no locking)
+        jobs = []  # each carries 'input' plus whichever *_out keys apply, and 'desc'
+        for input_path, base_name, sr_label, src_dir in resolved_inputs:
             if stop_checker and stop_checker(): return False
-
-            progress_val = int((i / total_inputs) * 100)
-            progress_callback(progress_val, f"Analyzing: {base_name}")
 
             # Per-file DFHRTF output root
             base_dir = src_dir if use_default else custom_dir
@@ -217,43 +262,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
 
             folder_name = os.path.basename(src_dir)
 
-            # Pull advanced dfhrtf params (with historically-correct defaults)
-            dfhrtf_adv = df_cfg.get('advanced', {})
-
-            cmd = [sys.executable, "-u", script_dfhrtf, "--input", input_path]
-            # 'Variable' -> 'variable'; '1/24' (or legacy 24) -> '24'
-            smoothing_cfg = str(df_cfg.get('smoothing', 'Variable'))
-            smoothing_arg = 'variable' if smoothing_cfg.lower() == 'variable' else smoothing_cfg.split('/')[-1]
-            cmd.extend(["--smoothing", smoothing_arg])
-            cmd.extend(["--tilt", str(df_cfg.get('tilt', 0.0))])
-            if df_cfg.get('extend_lf'):
-                cmd.append("--lf_ext_dfhrtf")
-                cmd.extend(["--lf_ext_dfhrtf_xover", str(df_cfg.get('xover', 375.0))])
-
-            # Advanced params forwarded to the subprocess
-            cmd.extend(["--n-fft",                str(int(dfhrtf_adv.get('n_fft', 16384)))])
-            cmd.extend(["--output-octave-fraction", str(int(dfhrtf_adv.get('output_octave_fraction', 48)))])
-            cmd.extend(["--norm-freq-hz",          str(float(dfhrtf_adv.get('norm_freq_hz', 1000.0)))])
-            cmd.extend(["--lf-blend-low-oct",      str(float(dfhrtf_adv.get('lf_blend_low_oct', 0.50)))])
-            cmd.extend(["--lf-blend-high-oct",     str(float(dfhrtf_adv.get('lf_blend_high_oct', 1.0)))])
-            cmd.extend(["--stereo-angle",           str(float(dfhrtf_adv.get('stereo_angle_deg', 30.0)))])
-            cmd.extend(["--lr-avg-gamma",           str(float(avg_params.get('softdtw_gamma_persofa', 0.01)))])
-            cmd.extend(["--weighting-mode",         str(df_cfg.get('weighting_mode', 'Auto')).lower()])
-
-            cmd.extend(["--grid-scale-mode",        str(dfhrtf_adv.get('weighted_grid_scale_mode', 'auto')).lower()])
-            cmd.extend(["--grid-scale-low",         str(float(dfhrtf_adv.get('weighted_grid_scale_low', 0.001)))])
-            cmd.extend(["--grid-scale-high",        str(float(dfhrtf_adv.get('weighted_grid_scale_high', 0.003)))])
-            if dfhrtf_adv.get('preserve_lr_balance', True):
-                cmd.append("--preserve-lr-balance")
-
-            cmd.extend(["--var-smooth-freq-low",  str(float(dfhrtf_adv.get('variable_smoothing_freq_low', 350.0)))])
-            cmd.extend(["--var-smooth-freq-hi",   str(float(dfhrtf_adv.get('variable_smoothing_freq_hi', 3000.0)))])
-            cmd.extend(["--var-smooth-n-low",     str(float(dfhrtf_adv.get('variable_smoothing_n_low', 1.0)))])
-            cmd.extend(["--var-smooth-n-hi",      str(float(dfhrtf_adv.get('variable_smoothing_n_hi', 12.0)))])
-            cmd.extend(["--var-smooth-gamma",     str(float(dfhrtf_adv.get('variable_smoothing_gamma', 0.88)))])
-            cmd.extend(["--var-smooth-mean-mode", str(dfhrtf_adv.get('variable_smoothing_mean_mode', 'db')).lower()])
-
-            cmd.extend(["--delimiter", delim])
+            job = {'input': input_path, 'desc': base_name}
 
             # Text Outputs
             ext = f".{df_cfg.get('text_extension', 'txt')}"
@@ -273,15 +282,15 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             if df_cfg.get('per_sofa_lr'):
                 path_l = get_text_path("L")
                 path_r = get_text_path("R")
-                cmd.extend(["--text-out-l", path_l, "--text-out-r", path_r])
+                job['text_out_l'] = path_l
+                job['text_out_r'] = path_r
                 grp = groups.setdefault(output_root, {'l': [], 'r': [], 'folder': folder_name})
                 grp['l'].append(path_l)
                 grp['r'].append(path_r)
 
             if df_cfg.get('per_sofa_avg'):
                 avg_tmpl = df_cfg.get('per_sofa_avg_filename', "{filename} avg LR")
-                cmd.extend(["--text-out-avg", get_text_path("Avg", _tmpl=avg_tmpl)])
-                cmd.extend(["--avg-algo", df_cfg.get('per_sofa_avg_algo', 'Arithmetic Mean')])
+                job['text_out_avg'] = get_text_path("Avg", _tmpl=avg_tmpl)
 
             # Graph Outputs
             if df_cfg.get('dfhrtf_graphs'):
@@ -290,7 +299,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
 
                 gname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{tilt}", tilt_str).replace("{graphtype}", "df")
                 if not gname.endswith(graph_ext): gname += graph_ext
-                cmd.extend(["--graph-out", os.path.join(output_root, gname)])
+                job['graph_out'] = os.path.join(output_root, gname)
 
             if df_cfg.get('weighted_grid'):
                 graph_template = df_cfg.get('graph_filename', "{filename}")
@@ -311,35 +320,65 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                     else:
                         if not wname.endswith(graph_ext): wname += graph_ext
 
-                    cmd.extend(["--graph-weighted-out", os.path.join(output_root, wname)])
+                    job['graph_weighted_out'] = os.path.join(output_root, wname)
 
-            # Run Subprocess
-            rc, _ = run_task(
-                cmd,
-                base_name,
-                input_path,
-                log_callback,
-                stop_checker,
-                log_path,
-                error_callback=error_callback,
+            jobs.append(job)
+
+        # 4. Execute Jobs (chunked + parallel)
+        if jobs:
+            proc_cfg = config.get('processing', {})
+            raw_workers = int(proc_cfg.get('max_workers', 0) or 0)
+            max_workers = raw_workers if raw_workers > 0 else max(1, (os.cpu_count() or 2) // 2)
+            chunk_size_cfg = int(proc_cfg.get('chunk_size', 16) or 16)
+            chunk_size = effective_chunk_size(len(jobs), max_workers, chunk_size_cfg)
+
+            log_callback(
+                f"DFHRTF analysis: {len(jobs)} file(s), {max_workers} worker(s), "
+                f"chunk size {chunk_size}."
             )
 
-            if rc is None:
-                # stop_checker fired inside run_task
+            tmp_dir = tempfile.mkdtemp(prefix="sofabuddy_manifest_")
+            try:
+                chunk_specs = []
+                for i, job_chunk in enumerate(chunk_jobs(jobs, chunk_size)):
+                    manifest_jobs = [
+                        {k: v for k, v in j.items() if k != 'desc'} for j in job_chunk
+                    ]
+                    manifest_path = write_manifest(tmp_dir, common, manifest_jobs)
+                    cmd = [sys.executable, "-u", script_dfhrtf, "--manifest", manifest_path]
+                    chunk_specs.append({
+                        'cmd': cmd,
+                        'desc': f"DFHRTF chunk {i + 1} ({len(job_chunk)} files)",
+                        'jobs': job_chunk,
+                        'input_path': job_chunk[0]['input'],
+                    })
+
+                failed_files, failed_chunks, was_stopped = run_chunks_parallel(
+                    chunk_specs, max_workers,
+                    progress_callback, log_callback, stop_checker,
+                    log_path, error_callback, env=blas_guarded_env(),
+                )
+            finally:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            if was_stopped:
                 return False
 
-            if rc != 0:
-                failures.append((base_name, rc))
+            if failed_files or failed_chunks:
+                chunk_job_total = sum(
+                    len(c['jobs']) for c in chunk_specs if c['desc'] in failed_chunks
+                )
+                total_failed = len(failed_files) + chunk_job_total
+                error_callback(
+                    f"DFHRTF analysis: {total_failed}/{total_inputs} tasks failed "
+                    f"— see inline blocks above and log: {log_path}"
+                )
+                for path, err in failed_files:
+                    error_callback(f"  - {path}: {err}")
+                for desc in failed_chunks:
+                    error_callback(f"  - {desc}: chunk failed before reporting per-file results")
 
-        if failures:
-            error_callback(
-                f"DFHRTF analysis: {len(failures)}/{total_inputs} tasks failed "
-                f"— see inline blocks above and log: {log_path}"
-            )
-            for name, rc in failures:
-                error_callback(f"  - {name}  (exit {rc})")
-
-        # 4. Post-Processing: Averaging - Global averages (per output-folder group)
+        # 5. Post-Processing: Averaging - Global averages (per output-folder group)
         # Default mode: one group per source folder -> per-folder average
         # Custom mode: all files share one output_root -> single global average
         if df_cfg.get('avg_all') and groups:

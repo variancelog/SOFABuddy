@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 import math
@@ -26,7 +27,6 @@ from core.sofa_io import read_sofa_robust  # noqa: E402
 PROCESSING_LENGTH = 2048
 OUTPUT_LENGTH = 512
 NORM_TARGET_DB = -1.0
-SPEED_OF_SOUND = 343.0 # m/s
 DEFAULT_ONSET_BUFFER = 32 # Samples of silence before the aligned impulse starts
 # =================================================
 
@@ -93,6 +93,10 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     ild_threshold        = getattr(args, 'ild_threshold',        1.5)
     ild_low_freq         = getattr(args, 'ild_low_freq',         300.0)
     ild_high_freq        = getattr(args, 'ild_high_freq',        6000.0)
+    debug_dump           = getattr(args, 'debug_dump',           None)  # diag-only; see --debug-dump
+
+    # Diagnostic capture (only populated when debug_dump is set; zero effect otherwise)
+    dbg = {} if debug_dump else None
 
     out_sofa = raw_sofa.copy()
     hrirs = out_sofa.Data_IR.copy()
@@ -127,15 +131,20 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     if args.harmonize_radius:
         orig_r = get_dominant_radius(out_sofa.SourcePosition)
         target_r = args.target_radius
-        physics_delay = int((target_r / SPEED_OF_SOUND) * target_fs)
-        total_shift = base_shift + physics_delay
         gain_multiplier = orig_r / target_r
-        
-        print(f"   3. Harmonizing Radius: {orig_r:.2f}m -> {target_r:.2f}m (Delay: {physics_delay} samples, Gain: x{gain_multiplier:.3f})")
+
+        # Distance normalization changes only the level (inverse-distance gain)
+        # and the declared radius metadata (rewritten before save). No absolute
+        # time-of-arrival delay is encoded: real SOFA files strip propagation
+        # delay and declare distance via SourcePosition alone, and encoding an
+        # absolute TOA here (~209 samples for 1.5 m @ 48 kHz) pushes the impulse
+        # onset past short output windows, destroying the frequency response.
+        print(f"   3. Harmonizing Radius: {orig_r:.2f}m -> {target_r:.2f}m (Gain: x{gain_multiplier:.3f})")
         hrirs *= gain_multiplier
     else:
-        total_shift = base_shift
         print(f"   3. Global Impulse Alignment: Stripping {global_onset - onset_buffer} samples of padding.")
+
+    total_shift = base_shift
 
     # Execute the Time Shift (Preserving ITD)
     hrirs = np.roll(hrirs, total_shift, axis=-1)
@@ -219,26 +228,66 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
         H_rep_min = H_synthetic_min * (1.0 - blend_weights) + H_raw_min * blend_weights
         
         # --- D. Fix Time Dispersion (Blend Excess Phase) ---
-        # The raw excess phase is too chaotic at low frequencies. We replace it 
-        # with a pure linear delay matching the time-of-arrival at the crossover.
-        linear_excess_phase = np.zeros_like(excess_phase)
-        
-        for m in range(M):
-            for r in range(R):
-                # Find the true delay at the crossover point
-                ex_phase_at_xover = np.mean(excess_phase[m, r, max(0, idx_xover-2):idx_xover+3])
-                delay_sec = -ex_phase_at_xover / (2 * np.pi * crossover_f)
-                
-                # Extrapolate that delay as a pure linear phase slope for the LF
-                linear_excess_phase[m, r, :] = -2 * np.pi * freqs * delay_sec
-                
+        # Replace the chaotic sub-crossover excess phase with a pure linear delay
+        # matching the time-of-arrival. The delay is estimated from the UNWRAP-
+        # IMMUNE group-delay slope, not a single-point read of the DC-anchored
+        # np.unwrap above: on MEASURED files the lowest bins are near-zero-
+        # magnitude noise, so np.unwrap can commit a spurious 2*pi slip that
+        # offsets the excess phase at the crossover and inflates the extrapolated
+        # delay by k*(fs/crossover) samples (~128 @ 48k/1000). That mispositions
+        # the spliced LF — chaotic sub-1kHz phase plus extra crop truncation.
+        # Adjacent-bin excess-phase increments wrap to (-pi, pi], so any global
+        # slip cancels; magnitude weighting ignores noisy near-null bins.
+        # SIMULATED files (clean phase) are unaffected — the estimate matches the
+        # old single-point value to a fraction of a sample.
+        excess_c = (H_raw / (mag_raw + 1e-12)) * np.exp(-1j * min_phase_raw)  # unit modulus
+        f_lo_fit = crossover_f / (2 ** blend_low_oct)   # exact-match edge (f_low)
+        f_hi_fit = crossover_f * 2.0
+        fit_idx = np.where((freqs >= f_lo_fit) & (freqs <= f_hi_fit))[0]
+        if fit_idx.size >= 2:
+            dphi = np.angle(excess_c[..., fit_idx[1:]] * np.conj(excess_c[..., fit_idx[:-1]]))
+            d_f = np.diff(freqs[fit_idx])
+            w_fit = np.minimum(mag_raw[..., fit_idx[1:]], mag_raw[..., fit_idx[:-1]])
+            num = np.sum(w_fit * (-dphi) * (2 * np.pi * d_f), axis=-1)
+            den = np.sum(w_fit * (2 * np.pi * d_f) ** 2, axis=-1)
+            delay_arr = num / (den + 1e-30)             # (M, R) seconds
+        else:  # degenerate grid — fall back to the legacy single-point estimate
+            ex_xover = np.mean(excess_phase[..., max(0, idx_xover-2):idx_xover+3], axis=-1)
+            delay_arr = -ex_xover / (2 * np.pi * crossover_f)
+        # Safety net: reject non-causal or ill-conditioned (near-null) estimates.
+        # Generous ceiling — the group-delay fit is the real defense; this only
+        # catches pathological positions, not a genuine large ITD.
+        max_delay_sec = (onset_buffer + 128) / target_fs
+        delay_arr = np.clip(delay_arr, 0.0, max_delay_sec)
+
+        # Extrapolate each position's delay as a pure linear phase slope for the LF
+        linear_excess_phase = -2 * np.pi * freqs[None, None, :] * delay_arr[..., None]
+        if debug_dump:
+            delay_sec_arr = delay_arr
+
         # Crossfade the phase: Linear delay (LF) -> True spatial phase (HF)
         blended_excess_phase = linear_excess_phase * (1.0 - blend_weights) + excess_phase * blend_weights
         
         # --- E. Final Reassembly ---
         H_rep = H_rep_min * np.exp(1j * blended_excess_phase)
     ## End: Test pure min phase splicing
-    
+
+    if debug_dump:
+        # Frequency-domain snapshot (post-splice, pre-DFEQ). Splice-only arrays
+        # are captured only when the LF path actually ran.
+        dbg.update(dict(
+            freqs=freqs, H_raw=H_raw, H_rep=H_rep,
+            anchor_level=anchor_level, blend_weights=blend_weights,
+            idx_xover=idx_xover, crossover_f=crossover_f,
+            global_onset=global_onset, total_shift=total_shift,
+        ))
+        if args.lf_extend and 'scaled_lf_target' in dir() and scaled_lf_target is not None:
+            dbg.update(dict(
+                scaled_lf_target=scaled_lf_target,
+                excess_phase=excess_phase,
+                delay_sec_arr=delay_sec_arr,
+            ))
+
 
     # 7. Step C: Apply Unified Diffuse Field EQ (if DFEQ is ON)
     H_final = H_rep
@@ -264,6 +313,8 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
 
     # 8. Back to Time Domain
     hrirs = fft.irfft(H_final, n=N, axis=-1)
+    if debug_dump:
+        dbg['hrirs_precrop'] = hrirs.copy()
 
     # 9. Dynamic Crop & Fade
     if hasattr(args, 'hrir_length') and args.hrir_length is not None:
@@ -295,7 +346,19 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
             hrirs *= scale
             print(f"      Scaled by {scale:.4f}.")
     else:
-        print("   8. Skipping Normalization (Preserving Harmonized Radius Volume).")
+        # Preserve the physical 1/r level relationship across the batch, but
+        # guard against clipping: the inverse-distance gain (orig_r/target_r)
+        # can push peaks past full scale. Only scale down when that happens.
+        peak = np.max(np.abs(hrirs))
+        if peak > 1.0:
+            target_linear = 10 ** (norm_target_db / 20.0)
+            scale = target_linear / peak
+            hrirs *= scale
+            print(f"   8. [!] Harmonized gain overshoots full scale by {20*np.log10(peak):+.2f} dB; "
+                  f"scaling down {20*np.log10(scale):.2f} dB to a {norm_target_db} dB peak. "
+                  f"This file's absolute level no longer matches the 1/r batch relationship.")
+        else:
+            print("   8. Skipping Normalization (Preserving Harmonized Radius Volume).")
 
     # 11. Save
     out_sofa.Data_IR = hrirs.astype(np.float32)
@@ -318,6 +381,18 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
         else:
             print(f"   9. ILD within threshold ({ild_est:+.2f} dB <= {ild_threshold:.1f} dB); no correction.")
 
+    # 13. Rewrite SourcePosition radii so the file's declared distance matches
+    # its processing. Scale the whole radius column so the dominant radius maps
+    # exactly to target_r; off-radius outliers keep their proportional deviation
+    # (and remain excluded by the ±0.05 m dominant-radius filter downstream).
+    # Runs AFTER ILD balancing, which recomputes weights from SourcePosition:
+    # rewriting first could let previously-excluded points pass the dominant-
+    # radius filter and shift the ILD estimate.
+    if args.harmonize_radius and orig_r != 0:
+        sp = np.asarray(out_sofa.SourcePosition, dtype=float).copy()
+        sp[:, 2] *= (target_r / orig_r)
+        out_sofa.SourcePosition = sp
+
     out_sofa.Data_SamplingRate = float(target_fs)
     # SOFA convention requires all *_Units values to be lowercase.
     # Some source files carry "Hertz" / "Metres" which sofar rejects on write.
@@ -331,20 +406,77 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
                     setattr(out_sofa, _attr, _val.lower())
             except Exception:
                 pass
+    if debug_dump:
+        dbg['hrirs_final'] = np.asarray(out_sofa.Data_IR, dtype=float)
+        dbg['target_fs'] = float(target_fs)
+        dbg['onset_buffer'] = int(onset_buffer)
+        os.makedirs(os.path.dirname(os.path.abspath(debug_dump)), exist_ok=True)
+        np.savez_compressed(debug_dump, **dbg)
+        print(f"   [debug] Dumped diagnostics to {debug_dump}")
+
     sf.write_sofa(output_path, out_sofa)
     print(f"   [+] Saved {os.path.basename(output_path)}")
 
+def run_manifest(manifest_path):
+    """
+    Batch-process multiple SOFA mastering jobs from one JSON manifest:
+      {"common": {...shared flags, same dest names as the CLI...},
+       "jobs": [{"input": ..., "output": ..., "target_fs": ..., "dfeq": ...}, ...]}
+
+    `common` supplies every attribute master_sofa() reads off `args` (both the
+    getattr(args, ..., default)-based advanced params and the directly-accessed
+    ones: harmonize_radius, target_radius, weighting_mode, lf_crossover,
+    lf_extend, hrir_length) — it is built once as an argparse.Namespace and
+    reused across jobs, exactly like the single-file CLI path's parsed args.
+
+    Consecutive jobs sharing the same input SOFA reuse the already-loaded
+    object (read-each-input-once optimization for chunks built from one
+    source file's SR/EQ variants). Each job is wrapped in try/except so one
+    failure doesn't abort its siblings; prints a `[JOB OK]`/`[JOB FAIL]`
+    sentinel line per job for the caller to parse. Returns a process exit
+    code (nonzero if any job failed).
+    """
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    common_ns = argparse.Namespace(**manifest.get("common", {}))
+    exit_code = 0
+    cached_input = None
+    cached_sofa = None
+
+    for job in manifest.get("jobs", []):
+        input_path = job.get("input")
+        try:
+            if input_path != cached_input:
+                if not os.path.exists(input_path):
+                    raise FileNotFoundError(f"Input file missing: {input_path}")
+                cached_sofa = read_sofa_robust(input_path)
+                cached_input = input_path
+
+            master_sofa(cached_sofa, job["target_fs"], bool(job.get("dfeq", False)),
+                        job["output"], common_ns)
+            print(f"[JOB OK] {input_path}")
+        except Exception as e:
+            exit_code = 1
+            print(f"[JOB FAIL] {input_path}: {e}")
+
+    return exit_code
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--manifest", type=str, default=None,
+                        help="Path to a JSON manifest for chunked/parallel batch processing "
+                             "(runs multiple jobs in this one process; skips --input/--output)")
+    parser.add_argument("--input", required=False)
+    parser.add_argument("--output", required=False)
     parser.add_argument("--dfeq", action="store_true", default=None)
     
     parser.add_argument("--target-fs", type=int, help="Explicit target samplerate (Hz) for standalone mode")
     parser.add_argument("--hrir-length", type=int, help="Override output HRIR length (Samples)")
     
     parser.add_argument("--lf-extend", action="store_true")
-    parser.add_argument("--lf-crossover", type=float, default=375.0)
+    parser.add_argument("--lf-crossover", type=float, default=1000.0)
 
     parser.add_argument("--harmonize-radius", action="store_true")
     parser.add_argument("--target-radius", type=float, default=1.2)
@@ -378,7 +510,18 @@ def main():
     parser.add_argument("--ild-high-freq", type=float, default=6000.0,
                         help="ILD estimation band high edge in Hz (default: 6000.0).")
 
+    # Diagnostics: dump intermediate splice/crop arrays to an .npz. Off by
+    # default; no effect on normal or GUI runs.
+    parser.add_argument("--debug-dump", type=str, default=None,
+                        help="Path to write an .npz of internal splice/crop arrays for diagnostics.")
+
     args = parser.parse_args()
+
+    if args.manifest:
+        sys.exit(run_manifest(args.manifest))
+
+    if not args.input or not args.output:
+        parser.error("--input and --output are required unless --manifest is given")
 
     targets = []
     print("=== Standalone Mode: Mastering Single SOFA ===")
