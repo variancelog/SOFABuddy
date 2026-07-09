@@ -11,6 +11,8 @@ Covers:
     OK/FAIL jobs coexist, sentinels are emitted, siblings survive a failure
   - the diagnostics-log lock: concurrent run_task() calls against the same
     log_path must not interleave
+  - per-file progress reconciliation in run_chunks_parallel()
+  - sofa_io.sanitize_sofa()'s GLOBAL_RoomType repair
 
 Run with:
     pytest tests/test_parallel.py
@@ -19,6 +21,7 @@ Run with:
 import math
 import os
 import re
+import sys
 import threading
 
 import numpy as np
@@ -30,9 +33,11 @@ from core.subprocess_utils import (
     chunk_jobs,
     write_manifest,
     run_task,
+    run_chunks_parallel,
 )
 from core.scripts.generate_sofa import run_manifest as sofa_run_manifest
 from core.scripts.generate_dfhrtf import run_manifest as dfhrtf_run_manifest
+from core.sofa_io import sanitize_sofa
 
 
 # ── 1. effective_chunk_size clamp math ─────────────────────────────────────────
@@ -290,3 +295,120 @@ class TestLogLockConcurrency:
                 "Block lines are not a clean, contiguous 0..N-1 sequence — "
                 "indicates interleaved writes from the concurrent thread."
             )
+
+
+# ── 4. Per-file progress reconciliation ─────────────────────────────────────────
+
+class TestRunChunksParallelProgress:
+    def _chunk_spec(self, desc, n_files, exit_code=0, emit_all_sentinels=True):
+        """A chunk whose subprocess prints [JOB OK] for n_files (or none, if
+        emit_all_sentinels is False — simulating a crash before any per-file
+        sentinel could be printed) then exits with exit_code."""
+        n_emit = n_files if emit_all_sentinels else 0
+        script_lines = [
+            "import sys",
+            f"for i in range({n_emit}):",
+            "    print(f'[JOB OK] file_{i}')",
+            f"sys.exit({exit_code})",
+        ]
+        script = "\n".join(script_lines)
+        return {
+            "cmd": [sys.executable, "-c", script],
+            "desc": desc,
+            "jobs": list(range(n_files)),
+            "input_path": desc,
+        }
+
+    def test_progress_advances_per_file_not_per_chunk(self, tmp_path):
+        chunk_specs = [
+            self._chunk_spec("chunk A", 3),
+            self._chunk_spec("chunk B", 2),
+        ]
+        progress_calls = []
+
+        def progress_callback(pct, msg):
+            progress_calls.append((pct, msg))
+
+        failed_files, failed_chunks, was_stopped = run_chunks_parallel(
+            chunk_specs, max_workers=2,
+            progress_callback=progress_callback,
+            log_callback=lambda s: None,
+            stop_checker=None,
+            log_path=str(tmp_path / "run.log"),
+            error_callback=lambda s: None,
+        )
+
+        assert not was_stopped
+        assert not failed_files
+        assert not failed_chunks
+        # 5 total files across both chunks -> at least 5 distinct progress
+        # updates (one per sentinel), not just 2 (one per chunk completion).
+        assert len(progress_calls) >= 5
+        # Progress must be monotonically non-decreasing and reach 100 at the end.
+        pcts = [p for p, _ in progress_calls]
+        assert pcts == sorted(pcts)
+        assert pcts[-1] == 100
+
+    def test_crashed_chunk_reconciles_progress_to_total(self, tmp_path):
+        # One well-behaved chunk, one that "crashes" before emitting any
+        # per-file sentinel and exits nonzero — progress should still reach
+        # 100% at the end via shortfall reconciliation.
+        chunk_specs = [
+            self._chunk_spec("good chunk", 3),
+            self._chunk_spec("crashed chunk", 4, exit_code=1, emit_all_sentinels=False),
+        ]
+        progress_calls = []
+
+        failed_files, failed_chunks, was_stopped = run_chunks_parallel(
+            chunk_specs, max_workers=2,
+            progress_callback=lambda pct, msg: progress_calls.append((pct, msg)),
+            log_callback=lambda s: None,
+            stop_checker=None,
+            log_path=str(tmp_path / "run.log"),
+            error_callback=lambda s: None,
+        )
+
+        assert not was_stopped
+        # No [JOB FAIL] sentinel was printed, only a nonzero exit with no
+        # per-file attribution -> the whole chunk is attributed as failed.
+        assert failed_chunks == ["crashed chunk"]
+        assert not failed_files
+        pcts = [p for p, _ in progress_calls]
+        assert pcts[-1] == 100
+
+
+# ── 5. GLOBAL_RoomType sanitize ─────────────────────────────────────────────────
+
+class TestSanitizeRoomType:
+    @pytest.mark.parametrize("raw,expected", [
+        ("free-field", "free field"),
+        ("Free_Field", "free field"),
+        ("FREE-FIELD", "free field"),
+        ("free field", "free field"),  # already conformant -> untouched
+        ("reverberant", "reverberant"),
+    ])
+    def test_room_type_normalized(self, raw, expected):
+        s = sf.Sofa("SimpleFreeFieldHRIR")
+        s.GLOBAL_RoomType = raw
+        sanitize_sofa(s)
+        assert s.GLOBAL_RoomType == expected
+
+    def test_sanitized_room_type_survives_write(self, tmp_path):
+        # Reproduces the reported failure: a "free-field" RoomType is accepted
+        # on read but rejected by sf.write_sofa's convention check unless
+        # normalized first.
+        src_path = _make_sofa_file(tmp_path / "src.sofa")
+        s2 = sf.read_sofa(src_path)
+        s2.GLOBAL_RoomType = "free-field"
+        sanitize_sofa(s2)
+        out_path = str(tmp_path / "out.sofa")
+        sf.write_sofa(out_path, s2)  # must not raise
+        assert os.path.exists(out_path)
+
+    def test_unrecognized_room_type_left_alone(self):
+        # Don't silently rewrite values we don't recognize as a normalized form
+        # of a valid convention value.
+        s = sf.Sofa("SimpleFreeFieldHRIR")
+        s.GLOBAL_RoomType = "some custom room"
+        sanitize_sofa(s)
+        assert s.GLOBAL_RoomType == "some custom room"

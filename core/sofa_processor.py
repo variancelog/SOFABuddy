@@ -182,6 +182,16 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
             for desc in failed_chunks:
                 error_callback(f"  - {desc}: chunk failed before reporting per-file results")
 
+            if total_failed >= total_tasks:
+                # Every SOFA job failed — nothing was mastered. Abort here rather
+                # than letting DFHRTF proceed and silently fall back to raw
+                # inputs while reporting a misleading "OK".
+                error_callback(
+                    "SOFA export: all tasks failed; no mastered output was produced. "
+                    "Aborting before DFHRTF analysis."
+                )
+                return False
+
         return True
 
     except Exception as e:

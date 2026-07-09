@@ -53,7 +53,8 @@ def new_run_log(stage: str, output_root: str = None) -> str:
 
 
 def run_task(cmd, desc, input_path, log_callback, stop_checker, log_path,
-             error_callback=None, tail_lines=40, quiet=False, env=None):
+             error_callback=None, tail_lines=40, quiet=False, env=None,
+             line_callback=None):
     """
     Run a subprocess, stream its output to log_callback and capture it,
     then write a diagnostic entry to log_path.
@@ -63,6 +64,11 @@ def run_task(cmd, desc, input_path, log_callback, stop_checker, log_path,
     inline FAIL block is still emitted on failure). Used when many chunk
     subprocesses run concurrently, so the console isn't flooded with
     interleaved per-line output from N workers at once.
+
+    line_callback: optional callback invoked with every stripped stdout line,
+    regardless of `quiet` — used by run_chunks_parallel() to parse per-file
+    [JOB OK]/[JOB FAIL] sentinels as they stream, rather than waiting for the
+    whole chunk subprocess to exit, so progress can advance per file.
 
     env: optional environment dict passed through to Popen. Callers that
     override this should base it on a copy of os.environ (see
@@ -99,6 +105,8 @@ def run_task(cmd, desc, input_path, log_callback, stop_checker, log_path,
             stripped = line.rstrip("\n")
             if not quiet:
                 log_callback(stripped)
+            if line_callback:
+                line_callback(stripped)
             captured.append(stripped)
 
     if not stopped:
@@ -253,10 +261,33 @@ def run_chunks_parallel(chunk_specs, max_workers, progress_callback, log_callbac
     """
     total_jobs = sum(len(c["jobs"]) for c in chunk_specs)
     completed_jobs = 0
+    completed_per_chunk = {}  # chunk desc -> sentinel-attributed file count seen so far
     failed_files = []
     failed_chunks = []
     was_stopped = False
     progress_lock = threading.Lock()
+
+    def _emit_progress(desc):
+        nonlocal completed_jobs
+        if total_jobs > 0:
+            pct = int((min(completed_jobs, total_jobs) / total_jobs) * 100)
+            progress_callback(
+                pct,
+                f"{desc} ({min(completed_jobs, total_jobs)}/{total_jobs} files)",
+            )
+
+    def _make_on_line(chunk):
+        desc = chunk["desc"]
+
+        def _on_line(stripped):
+            nonlocal completed_jobs
+            if stripped.startswith("[JOB OK] ") or stripped.startswith("[JOB FAIL] "):
+                with progress_lock:
+                    completed_jobs = min(completed_jobs + 1, total_jobs)
+                    completed_per_chunk[desc] = completed_per_chunk.get(desc, 0) + 1
+                    _emit_progress(desc)
+
+        return _on_line
 
     def _run_one(chunk):
         return run_task(
@@ -264,6 +295,7 @@ def run_chunks_parallel(chunk_specs, max_workers, progress_callback, log_callbac
             chunk.get("input_path", chunk["desc"]),
             log_callback, stop_checker, log_path,
             error_callback=error_callback, quiet=True, env=env,
+            line_callback=_make_on_line(chunk),
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
@@ -283,19 +315,21 @@ def run_chunks_parallel(chunk_specs, max_workers, progress_callback, log_callbac
             failed_files.extend(fail_pairs)
 
             with progress_lock:
-                completed_jobs += len(chunk["jobs"])
                 if sentinel_total == 0 and rc != 0:
                     # Chunk died before printing any sentinel (e.g. crashed on
                     # import or on a corrupt manifest) — attribute to the chunk
                     # since we can't name the individual file.
                     failed_chunks.append(chunk["desc"])
 
-                if total_jobs > 0:
-                    pct = int((min(completed_jobs, total_jobs) / total_jobs) * 100)
-                    progress_callback(
-                        pct,
-                        f"{chunk['desc']} ({min(completed_jobs, total_jobs)}/{total_jobs} files)",
-                    )
+                # Reconcile any shortfall: if the chunk exited before its
+                # per-line callback saw a sentinel for every job (e.g. crashed
+                # mid-chunk), still advance progress to account for the whole
+                # chunk so the bar reaches 100% at the end of the run.
+                seen = completed_per_chunk.get(chunk["desc"], 0)
+                shortfall = len(chunk["jobs"]) - seen
+                if shortfall > 0:
+                    completed_jobs = min(completed_jobs + shortfall, total_jobs)
+                _emit_progress(chunk["desc"])
 
             if fail_pairs:
                 log_callback(

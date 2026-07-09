@@ -1,3 +1,19 @@
+## v0.4.0 (2026-07-08)
+
+### Added
+- **Parallel + chunked batch processing** for both SOFA mastering and DFHRTF analysis: each stage now builds its full job list up front, groups it into contiguous chunks, and runs chunks concurrently through a bounded thread pool (`core/subprocess_utils.py`: `run_chunks_parallel()`), instead of one subprocess per file run strictly sequentially. Each backend script gained a `--manifest` mode that processes many jobs in one process (amortizing the numpy/scipy/sofar import cost) and prints a `[JOB OK]`/`[JOB FAIL]` sentinel per file so progress and failure reporting stay attributed per file rather than per subprocess. New JSON-only settings `processing.max_workers` (default `0` = auto, half of CPU cores) and `processing.chunk_size` (default `16`).
+- **Per-file console/progress feedback** during batch runs: `run_task()` now streams every subprocess line through an optional `line_callback`, and `run_chunks_parallel()` uses it to parse `[JOB OK]`/`[JOB FAIL]` sentinels as they arrive, advancing the progress bar per file across all concurrent chunks instead of only when an entire chunk finishes.
+
+### Changed
+- Raised the SOFA/DFHRTF LF-splice crossover default from 400 Hz to 1000 Hz (schema bounds updated to match): matching Brinkmann's HUTUBS reference showed the old crossover forced the phase-blend seam into a band where measured-file phase is unreliable, producing ripple on measured (ARI/BILI/LISTEN) sources at 256-sample output. All four validation datasets now pass cleanly at 256 samples with no algorithm change.
+- If SOFA mastering fails for every job in a run, `process_sofa_exports()` now returns failure instead of reporting success — the app stops before running DFHRTF analysis on stale or raw input, rather than logging a misleading "OK" over data that was never mastered.
+- If SOFA mastering is enabled but fails for only *some* files, DFHRTF analysis now skips those specific files (with a `[!] Skipping <name>: no mastered SOFA found` log line) instead of silently falling back to analyzing their raw, un-mastered input.
+- `tests/` is now tracked in git (previously gitignored despite containing the full test suite); superseded ad-hoc diagnostic scripts were removed as part of the same cleanup.
+
+### Fixed
+- `core/sofa_io.py`'s `sanitize_sofa()` now normalizes non-conformant `GLOBAL_RoomType` values (e.g. `"free-field"` → `"free field"`) on load. Some source databases (e.g. RWTH Aachen) declare RoomType with a hyphen/underscore/mixed case, which sofar accepts on read but rejects on write ("must be free field, reverberant, shoebox, dae") — every SOFA mastering job for such a file previously failed.
+- Fixed 6 stale test failures and 1 collection error surfaced by the crossover-default change and the tests/ tracking cleanup (hardcoded crossover literals, an ILD test fixture that needed curating, and grid-classifier fixtures referencing directories that were never committed).
+
 ## v0.3.0 (2026-07-04)
 
 ### Added

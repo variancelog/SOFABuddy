@@ -173,14 +173,19 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 mastered_dir = os.path.join(base_dir, SOFA_MASTERED_DIR)
 
                 if not os.path.exists(mastered_dir):
-                    log_callback(f" [!] Warning: Mastered dir not found for {base_name}. Using raw file.")
-                    resolved_inputs.append((raw_path, base_name, "raw", src_dir))
+                    log_callback(
+                        f" [!] Skipping {base_name}: no mastered SOFA found "
+                        f"(mastering likely failed)."
+                    )
                     continue
 
                 pattern = os.path.join(mastered_dir, f"*{base_name}*.sofa")
                 candidates = glob.glob(pattern)
                 if not candidates:
-                    resolved_inputs.append((raw_path, base_name, "raw", src_dir))
+                    log_callback(
+                        f" [!] Skipping {base_name}: no mastered SOFA found "
+                        f"(mastering likely failed)."
+                    )
                     continue
 
                 uneq_candidates = [c for c in candidates if "uneq" in c.lower()]

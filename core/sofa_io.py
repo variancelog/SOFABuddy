@@ -13,6 +13,7 @@ Both backend scripts import from here so the logic lives in one place.
 """
 
 import os
+import re
 import tempfile
 import warnings
 
@@ -94,6 +95,26 @@ def sanitize_sofa(sofa):
                 "emitter data is not used in HRIR processing)"
             )
             sofa.EmitterPosition = np.zeros((1, 3, 1))
+    except AttributeError:
+        pass
+
+    # Rule: GLOBAL_RoomType must be one of "free field", "reverberant",
+    # "shoebox", "dae" (with a literal space, not a hyphen/underscore).
+    # Some databases (e.g. RWTH Aachen) declare "free-field", which sofar
+    # accepts on read (via the verify=False fallback above) but rejects on
+    # write with "GLOBAL_RoomType is free-field but must be free field, ...".
+    _VALID_ROOM_TYPES = {"free field", "reverberant", "shoebox", "dae"}
+    try:
+        room_type = sofa.GLOBAL_RoomType
+        if isinstance(room_type, str):
+            normalized = re.sub(r"[-_]+", " ", room_type.strip().lower())
+            normalized = re.sub(r"\s+", " ", normalized)
+            if normalized in _VALID_ROOM_TYPES and normalized != room_type:
+                print(
+                    f"[!] Sanitizing: GLOBAL_RoomType '{room_type}' -> '{normalized}' "
+                    "(convention requires a literal space, not a hyphen/underscore)"
+                )
+                sofa.GLOBAL_RoomType = normalized
     except AttributeError:
         pass
 
