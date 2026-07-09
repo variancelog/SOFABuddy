@@ -69,7 +69,7 @@ Controls the SOFA mastering stage. Toggle **SOFA Outputs** on to enable.
 |---|---|
 | Samplerates | Which output samplerates to produce: 44.1k / 48k / 96k |
 | Extend LF | Replace sub-crossover magnitudes with an ideal reference curve |
-| Crossover Hz | Transition frequency for LF extension (default 375 Hz) |
+| Crossover Hz | Transition frequency for LF extension (default 1000 Hz) |
 | Un-EQ'd | Include unequalized SOFA output variants |
 | DF-EQ'd | Include diffuse-field-equalized output variants |
 | Normalize Grid Radius | Harmonize all HRIRs to a target measurement distance |
@@ -110,7 +110,7 @@ Controls DFHRTF extraction and averaging. Toggle **DFHRTF Outputs** on to enable
 | Smoothing | **Variable** (default): frequency-dependent smoothing — heavy (1-octave) at low frequencies easing to light (1/12-octave) at high frequencies; or a fixed fraction: 1/3, 1/6, 1/12, 1/24, or 1/48 octave |
 | Tilt dB/Oct | Spectral tilt centered at 1 kHz (range −2 to +1 dB/oct) |
 | Extend LF | Linearize sub-crossover frequency response |
-| Crossover Hz | Transition frequency for LF extension (default 400 Hz) |
+| Crossover Hz | Transition frequency for LF extension (default 1000 Hz) |
 
 Variable smoothing's anchor frequencies, octave fractions, transition warp, and window-average mode are tunable in `user_settings.json` under the `dfhrtf.advanced.variable_smoothing_*` keys (defaults: 1/1 octave at/below 350 Hz → 1/12 octave at/above 3 kHz, gamma 0.88, dB-domain mean).
 

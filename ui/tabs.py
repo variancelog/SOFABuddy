@@ -413,8 +413,8 @@ class SofaTab(QWidget):
         self.btn_lf = FlameToggleButton("Extend LF")
         self.btn_lf.setToolTip("<p>Replaces HRIR magnitudes below the crossover frequency with an 'ideal' frequency response. Recommended for most measured SOFAs.</p>")
         _xmin, _xmax = schema_bounds("sofa.xover", (200.0, 500.0))
-        self.slider_xover = FlameNumericSlider("Crossover Hz", _xmin, _xmax, 5.0, 375.0)
-        self.slider_xover.setToolTip("<p>Crossover frequency for Extend LF function. 375Hz works best in most cases.</p>")
+        self.slider_xover = FlameNumericSlider("Crossover Hz", _xmin, _xmax, 5.0, 1000.0)
+        self.slider_xover.setToolTip("<p>Crossover frequency for Extend LF function. 1000Hz works best in most cases.</p>")
         self.btn_lf.toggled.connect(self.slider_xover.setEnabled)
         self.slider_xover.setEnabled(False)
         lf_xover_layout.addWidget(self.btn_lf)
@@ -519,7 +519,7 @@ class SofaTab(QWidget):
         self.btn_sr_96k.set_value(96000 in srs)
 
         self.btn_lf.set_value(bool(cfg.get('lf_extension', False)))
-        self.slider_xover.set_value(cfg.get('xover', 375.0))
+        self.slider_xover.set_value(cfg.get('xover', 1000.0))
         self.btn_uneq.set_value(bool(cfg.get('uneq', False)))
         self.btn_dfeq.set_value(bool(cfg.get('dfeq', True)))
         self.btn_ild.set_value(bool(cfg.get('ild_fix', True)))
@@ -650,7 +650,7 @@ class DfhrtfTab(QWidget):
         self.btn_extend_lf = FlameToggleButton("Extend LF")
         self.btn_extend_lf.setToolTip("<p>Extend and linerizes low frequency (LF) response below the crossover frequency. Not needed for simulated SOFA files or if Extend LF already applied to measured SOFA files.</p>")
         _xmin, _xmax = schema_bounds("dfhrtf.xover", (200.0, 500.0))
-        self.slider_xover = FlameNumericSlider("Crossover Hz", _xmin, _xmax, 5.0, 375.0)
+        self.slider_xover = FlameNumericSlider("Crossover Hz", _xmin, _xmax, 5.0, 1000.0)
         self.slider_xover.setToolTip("<p>Crossover frequency for low frequency extenstion.</p>")
 
         # --- Post Processing Section ---
@@ -792,7 +792,7 @@ class DfhrtfTab(QWidget):
         self.dd_smoothing.set_value(cfg.get('smoothing', 'Variable'))
         self.slider_tilt.set_value(cfg.get('tilt', 0.0))
         self.btn_extend_lf.set_value(bool(cfg.get('extend_lf', False)))
-        self.slider_xover.set_value(cfg.get('xover', 375.0))
+        self.slider_xover.set_value(cfg.get('xover', 1000.0))
 
         self.btn_avg_all.set_value(bool(cfg.get('avg_all', False)))
         self.dd_algo.set_value(cfg.get('algo', 'Arithmetic Mean'))

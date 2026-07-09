@@ -71,9 +71,11 @@ DESCRIPTIONS: dict[str, str] = {
         "transfer is flat on average."
     ),
     "sofa.normalize_distance": (
-        "Harmonize all HRIRs to a common listening radius using physics-based "
-        "delay correction (sample-accurate fractional delay) and inverse-square "
-        "gain scaling."
+        "Harmonize all HRIRs to a common listening radius by applying an "
+        "inverse-distance gain and rewriting the SourcePosition radius metadata "
+        "to the target. No propagation delay is encoded in the impulse response "
+        "(distance is declared via metadata), so the frequency response is "
+        "unchanged at any output length."
     ),
     "sofa.distance_m": (
         "Target listening radius in metres for distance normalization. "

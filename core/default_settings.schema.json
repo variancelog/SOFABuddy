@@ -61,8 +61,8 @@
         },
         "xover": {
           "type": "number",
-          "minimum": 200.0,
-          "maximum": 700.0,
+          "minimum": 500.0,
+          "maximum": 1200.0,
           "description": "Crossover frequency (Hz) for LF extension blending. The synthetic LF signal is spliced in below this frequency; blend width is controlled by advanced.blend_low_oct / blend_high_oct."
         },
         "uneq": {
@@ -75,7 +75,7 @@
         },
         "normalize_distance": {
           "type": "boolean",
-          "description": "Harmonize all HRIRs to a common listening radius using physics-based delay correction (sample-accurate fractional delay) and inverse-square gain scaling."
+          "description": "Harmonize all HRIRs to a common listening radius by applying an inverse-distance gain and rewriting the SourcePosition radius metadata to the target. No propagation delay is encoded in the impulse response (distance is declared via metadata), so the frequency response is unchanged at any output length."
         },
         "distance_m": {
           "type": "number",
@@ -271,8 +271,8 @@
         },
         "xover": {
           "type": "number",
-          "minimum": 200.0,
-          "maximum": 700.0,
+          "minimum": 250.0,
+          "maximum": 1000.0,
           "description": "Crossover frequency (Hz) for DFHRTF LF extension blending."
         },
         "avg_all": {
