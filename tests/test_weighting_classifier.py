@@ -44,13 +44,27 @@ SOFA_DIR = os.path.join(DATA_DIR, 'sofa')
 # Loaders / converters
 # ---------------------------------------------------------------------------
 
+def _nodes_path(subdir):
+    return os.path.join(DATA_DIR, subdir, 'Nodes.txt')
+
+
+def _has_nodes(subdir):
+    """Whether tests/data/<subdir>/Nodes.txt is present on disk.
+
+    Several grid fixtures (Lebedev_N10, Sphere_ICO, Sphere_UV, Default) were
+    never committed to this repo — not deleted, never added — so battery
+    builders must skip them gracefully instead of hard-failing collection.
+    """
+    return os.path.isfile(_nodes_path(subdir))
+
+
 def _load_nodes(subdir):
     """Load a Mesh2HRTF Nodes.txt from tests/data/<subdir>/Nodes.txt.
 
     Format: first line is node count; remaining lines are  id x y z.
     Returns unit-normalised (N, 3) Cartesian coords.
     """
-    path = os.path.join(DATA_DIR, subdir, 'Nodes.txt')
+    path = _nodes_path(subdir)
     data = np.loadtxt(path, skiprows=1)   # skip the count header
     xyz = data[:, 1:4]                    # drop id column
     norms = np.linalg.norm(xyz, axis=1, keepdims=True)
@@ -135,9 +149,13 @@ _NON_DESIGN_DIRS = [
 
 
 def _build_file_battery():
-    """Return [(name, sp, expected)] for all Mesh2HRTF Nodes.txt grids."""
+    """Return [(name, sp, expected)] for all Mesh2HRTF Nodes.txt grids present
+    on disk. Missing fixture dirs are skipped rather than raising — see
+    _has_nodes()."""
     items = []
     for (subdir, label) in _DESIGN_DIRS + _NON_DESIGN_DIRS:
+        if not _has_nodes(subdir):
+            continue
         xyz = _load_nodes(subdir)
         sp = _nodes_as_sourcepos(xyz)
         items.append((subdir, sp, label))
@@ -234,7 +252,15 @@ def test_residual_separation_has_clean_margin():
         xyz = _load_nodes(subdir)
         design_residuals[subdir] = _worst_sh_residual(xyz)
 
-    for (subdir, label) in _NON_DESIGN_DIRS:
+    available_non_design_dirs = [d for d in _NON_DESIGN_DIRS if _has_nodes(d[0])]
+    if not available_non_design_dirs:
+        pytest.skip(
+            "No non-design fixture dirs present (Lebedev_N10/Sphere_ICO/"
+            "Sphere_UV/Default were never committed) — cannot compute the "
+            "design-vs-non-design gap without at least one."
+        )
+
+    for (subdir, label) in available_non_design_dirs:
         xyz = _load_nodes(subdir)
         non_design_residuals[subdir] = _worst_sh_residual(xyz)
 

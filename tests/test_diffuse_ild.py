@@ -45,6 +45,11 @@ SOFA_DIR = os.path.join(os.path.dirname(__file__), "data", "sofa")
 KNOWN_BAD = "BILI 1103-n.sofa"
 KNOWN_BAD_PATH = os.path.join(SOFA_DIR, KNOWN_BAD)
 
+# Fixtures with genuine LF-ILD that exceeds LF_TOL — these are known offenders,
+# not calibration-clean files, so they're excluded from the healthy-file guard
+# and instead asserted to be *flagged* by test_known_offenders_are_flagged below.
+KNOWN_OFFENDERS = {"measured_BILI.sofa", "measured_LISTEN.sofa"}
+
 _sofa_dir_exists = os.path.isdir(SOFA_DIR) and bool(os.listdir(SOFA_DIR))
 
 # ---------------------------------------------------------------------------
@@ -176,13 +181,14 @@ def test_known_bad_bili_1103():
 # ---------------------------------------------------------------------------
 
 def _healthy_sofa_files():
-    """Return (name, path) for every .sofa fixture that is NOT the known-bad."""
+    """Return (name, path) for every .sofa fixture that is NOT a known offender."""
     if not _sofa_dir_exists:
         return []
     return [
         (f, os.path.join(SOFA_DIR, f))
         for f in sorted(os.listdir(SOFA_DIR))
         if f.endswith(".sofa") and f != KNOWN_BAD
+        and f not in KNOWN_OFFENDERS
         and not f.endswith("_ildfix.sofa")
     ]
 
@@ -206,4 +212,40 @@ def test_healthy_sofa_fixtures(fname, fpath):
     assert abs(r["broadband_ild_db"]) <= BROADBAND_TOL, (
         f"{fname}: broadband_ild_db = {r['broadband_ild_db']:.2f} dB "
         f"exceeds tolerance {BROADBAND_TOL} dB."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — known-offender guard: fixtures with genuine LF-ILD are flagged
+# ---------------------------------------------------------------------------
+
+def _known_offender_files():
+    """Return (name, path) for known-offender fixtures present on disk."""
+    if not _sofa_dir_exists:
+        return []
+    return [
+        (f, os.path.join(SOFA_DIR, f))
+        for f in sorted(os.listdir(SOFA_DIR))
+        if f in KNOWN_OFFENDERS
+    ]
+
+
+@pytest.mark.skipif(
+    not _sofa_dir_exists,
+    reason="tests/data/sofa/ is empty or missing",
+)
+@pytest.mark.parametrize("fname,fpath", _known_offender_files())
+def test_known_offenders_are_flagged(fname, fpath):
+    """Known-offender fixtures (genuine LF-ILD) must exceed LF_TOL — this is a
+    positive detection, not a defect: it confirms the audit engine correctly
+    flags real calibration/measurement imbalance rather than being loosened
+    to call these fixtures 'healthy'."""
+    sofar = pytest.importorskip("sofar", reason="sofar not installed")
+
+    sofa = sofar.read_sofa(fpath)
+    r = diffuse_field_ild(sofa)
+
+    assert abs(r["lf_ild_db"]) > LF_TOL, (
+        f"{fname}: expected |lf_ild_db| > {LF_TOL} dB (known offender), "
+        f"got {r['lf_ild_db']:.2f} dB — has this fixture been fixed upstream?"
     )

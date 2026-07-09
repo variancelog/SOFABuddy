@@ -85,11 +85,12 @@ class TestLoadDefaults:
 
 class TestDeepMerge:
     def test_partial_user_override_preserves_defaults(self, tmp_user_dir):
-        user = {"sofa": {"xover": 400.0}}
+        xover = C.SCHEMA["sofa.xover"]["min"] + 100.0  # in-band override value
+        user = {"sofa": {"xover": xover}}
         path = write_user(tmp_user_dir, user)
         cfg, _ = C.load_merged(path)
         # User override applied
-        assert cfg["sofa"]["xover"] == pytest.approx(400.0)
+        assert cfg["sofa"]["xover"] == pytest.approx(xover)
         # Default values preserved
         assert cfg["sofa"]["dfeq"] is True
         assert cfg["averaging"]["num_points"] == 1024
@@ -183,8 +184,9 @@ class TestValidation:
 
     # Type coercion
     def test_float_as_string_coerced(self):
-        cfg, warnings = self._merged_with_patch({"sofa": {"xover": "350.0"}})
-        assert cfg["sofa"]["xover"] == pytest.approx(350.0)
+        xover = C.SCHEMA["sofa.xover"]["min"] + 100.0  # in-band override value
+        cfg, warnings = self._merged_with_patch({"sofa": {"xover": str(xover)}})
+        assert cfg["sofa"]["xover"] == pytest.approx(xover)
         # No warning if coercible
         assert not any("xover" in w for w in warnings)
 
@@ -212,8 +214,9 @@ class TestAtomicRoundTrip:
         monkeypatch.setattr(mgr, "user_path", lambda: user_path)
 
         # Load defaults, tweak a value, save
+        xover = C.SCHEMA["sofa.xover"]["min"] + 120.0  # in-band override value
         cfg = mgr.load()
-        cfg["sofa"]["xover"] = 420.0
+        cfg["sofa"]["xover"] = xover
         cfg["averaging"]["num_points"] = 256
         mgr.save(cfg)
 
@@ -221,7 +224,7 @@ class TestAtomicRoundTrip:
         mgr2 = C.ConfigManager()
         monkeypatch.setattr(mgr2, "user_path", lambda: user_path)
         reloaded = mgr2.load()
-        assert reloaded["sofa"]["xover"] == pytest.approx(420.0)
+        assert reloaded["sofa"]["xover"] == pytest.approx(xover)
         assert reloaded["averaging"]["num_points"] == 256
         # schema_version must be written
         assert reloaded["schema_version"] == 1
@@ -310,16 +313,17 @@ class TestTabRoundTrip:
 
     def test_sofa_tab_restores_non_default_values(self):
         from ui.tabs import SofaTab
+        xover = C.SCHEMA["sofa.xover"]["min"] + 100.0  # in-band override value
         tab = SofaTab()
         cfg = tab.get_config()
-        cfg["xover"] = 300.0
+        cfg["xover"] = xover
         cfg["samplerates"] = [44100, 96000]
         cfg["dfeq"] = False
         cfg["uneq"] = True
         cfg["enabled"] = True
         tab.set_config(cfg)
         restored = tab.get_config()
-        assert restored["xover"] == pytest.approx(300.0)
+        assert restored["xover"] == pytest.approx(xover)
         assert 44100 in restored["samplerates"]
         assert 96000 in restored["samplerates"]
         assert restored["dfeq"] is False
