@@ -1,3 +1,8 @@
+## v0.4.1 (2026-07-09)
+
+### Fixed
+- **CPU oversubscription during parallel batch runs**: with the new bounded chunk pool (half of CPU cores) the app was still pegging every core at 100%. Root cause: `core/averaging.py`'s Soft-DTW barycenter (`_softdtw_func`) spun up an *unbounded* `ThreadPoolExecutor` (one thread per input curve) on top of the chunk-pool parallelism — nested inside every chunk subprocess's per-SOFA L/R average, and again unguarded (plus BLAS fan-out) in the parent process's global averaging. `soft_dtw_barycenter()`/`_softdtw_func()` now take an `n_workers` parameter (default `1`): the per-SOFA average inside a chunk subprocess passes `n_workers=1` (the chunk pool already provides concurrency), and the parent's global averaging (`dfhrtf_processor.run_averaging`) sizes it to the resolved chunk-pool worker count. The app entry point (`main.pyw`) now pins `OMP/OPENBLAS/MKL/NUMEXPR_NUM_THREADS=1` (via `setdefault`, respecting user values) before any numpy/scipy import so the in-process averaging can't oversubscribe through BLAS. Batch worker subprocesses are also launched at below-normal priority (`BELOW_NORMAL_PRIORITY_CLASS` on Windows, `os.nice(10)` on POSIX) so a full-core run keeps the GUI responsive.
+
 ## v0.4.0 (2026-07-08)
 
 ### Added

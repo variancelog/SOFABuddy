@@ -15,13 +15,16 @@ def _sdtw_worker(Z, X_i, gamma):
     sdtw = SoftDTW(D, gamma=gamma)
     return sdtw.compute(), D.jacobian_product(sdtw.grad())
 
-def _softdtw_func(Z, X, weights, barycenter_shape, gamma, progress_queue=None, state=None, max_iter=25):
+def _softdtw_func(Z, X, weights, barycenter_shape, gamma, progress_queue=None, state=None, max_iter=25, n_workers=1):
     Z_reshaped = Z.reshape(barycenter_shape)
     G = np.zeros_like(Z_reshaped)
     obj = 0.0
-    
+
     total_curves = len(X)
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    # Bounded worker count: default 1 keeps this in-loop pool from oversubscribing
+    # cores when the caller already provides concurrency (chunk subprocesses /
+    # the chunk-pool sizing used by the parent's global averaging).
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, n_workers)) as executor:
         futures = {executor.submit(_sdtw_worker, Z_reshaped, X[i], gamma): i for i in range(total_curves)}
         completed = 0
         for future in concurrent.futures.as_completed(futures):
@@ -286,7 +289,7 @@ class CurveAverager:
     @staticmethod
     def soft_dtw_barycenter(norm_mags_2d: np.ndarray, gamma: float = 0.01,
                              max_iter: int = 25, tol: float = 1e-3,
-                             progress_queue=None) -> np.ndarray:
+                             progress_queue=None, n_workers: int = 1) -> np.ndarray:
         """Smooth shape-preserving mean using Regularized Soft-DTW."""
         if len(norm_mags_2d) == 0:
             return np.array([])
@@ -309,7 +312,7 @@ class CurveAverager:
         res = minimize(
             _softdtw_func,
             init_barycenter.ravel(),
-            args=(ts_data, weights, init_barycenter.shape, gamma, progress_queue, state, max_iter),
+            args=(ts_data, weights, init_barycenter.shape, gamma, progress_queue, state, max_iter, n_workers),
             method="L-BFGS-B",
             jac=True,
             tol=tol,

@@ -17,7 +17,7 @@ DFHRTF_OUTPUT_DIR = "DFHRTF"
 # In-project imports (Deferred inside functions to speed up startup)
 
 def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter,
-                  log_callback, stop_checker=None, avg_params=None):
+                  log_callback, stop_checker=None, avg_params=None, n_workers=1):
     """
     Orchestrates the full ingestion -> interpolation -> outlier -> averaging chain.
 
@@ -25,6 +25,11 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
       num_points, outlier_threshold_std,
       softdtw_gamma, geo_arc_y_scale
     All keys fall back to the values used historically if absent.
+
+    n_workers caps the Soft-DTW barycenter's internal thread pool (only the
+    Soft-DTW algorithm path uses it). This runs in the parent GUI process, so it
+    is sized to the same worker count as the chunk pools to avoid oversubscribing
+    cores (the parent's BLAS is already pinned to 1 thread at app startup).
     """
     from core.averaging import DataIngestor, CommonAxisInterpolator, OutlierDetector, CurveAverager
 
@@ -88,7 +93,8 @@ def run_averaging(file_list, algo_name, exclude_outliers, output_path, delimiter
                 final_mags_2d,
                 gamma=softdtw_gamma,
                 max_iter=softdtw_max_iter,
-                tol=softdtw_tol
+                tol=softdtw_tol,
+                n_workers=n_workers
             )
         else:
             avg_norm = CurveAverager.arithmetic_mean(final_mags_2d)
@@ -329,11 +335,15 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
 
             jobs.append(job)
 
+        # Resolve worker count once, up front, so the post-step global averaging
+        # phase can reuse it even when there are no chunk jobs to run (0 = auto =
+        # half of CPU cores; mirrors run_chunks_parallel's sizing).
+        proc_cfg = config.get('processing', {})
+        raw_workers = int(proc_cfg.get('max_workers', 0) or 0)
+        max_workers = raw_workers if raw_workers > 0 else max(1, (os.cpu_count() or 2) // 2)
+
         # 4. Execute Jobs (chunked + parallel)
         if jobs:
-            proc_cfg = config.get('processing', {})
-            raw_workers = int(proc_cfg.get('max_workers', 0) or 0)
-            max_workers = raw_workers if raw_workers > 0 else max(1, (os.cpu_count() or 2) // 2)
             chunk_size_cfg = int(proc_cfg.get('chunk_size', 16) or 16)
             chunk_size = effective_chunk_size(len(jobs), max_workers, chunk_size_cfg)
 
@@ -414,10 +424,12 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                     return os.path.join(_dir, fname)
 
                 res_l = run_averaging(grp['l'], algo, exclude, get_avg_path("L"), delim,
-                                      log_callback, stop_checker, avg_params=avg_params)
+                                      log_callback, stop_checker, avg_params=avg_params,
+                                      n_workers=max_workers)
                 if stop_checker and stop_checker(): return False
                 res_r = run_averaging(grp['r'], algo, exclude, get_avg_path("R"), delim,
-                                      log_callback, stop_checker, avg_params=avg_params)
+                                      log_callback, stop_checker, avg_params=avg_params,
+                                      n_workers=max_workers)
 
                 if df_cfg.get('dfhrtf_graphs') and res_l and res_r:
                     try:

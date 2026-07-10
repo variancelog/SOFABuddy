@@ -417,7 +417,9 @@ def run_dfhrtf(args):
             avg_norm = CurveAverager.geometric_arc_length_blend(norm_freqs, norm * 0.01) / 0.01
         elif args.avg_algo == "Soft-DTW":
             print("   -> Running Soft-DTW L/R average...")
-            avg_norm = CurveAverager.soft_dtw_barycenter(norm, gamma=args.lr_avg_gamma)
+            # n_workers=1: this runs inside a chunk subprocess; the parallel
+            # chunk pool already provides the concurrency (no BLAS/thread fan-out).
+            avg_norm = CurveAverager.soft_dtw_barycenter(norm, gamma=args.lr_avg_gamma, n_workers=1)
         else:
             avg_norm = CurveAverager.arithmetic_mean(norm)
         val_avg = CommonAxisInterpolator.unnormalize_magnitude(avg_norm, mag_min, mag_max)

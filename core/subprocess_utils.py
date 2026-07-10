@@ -79,7 +79,15 @@ def run_task(cmd, desc, input_path, log_callback, stop_checker, log_path,
         (returncode, captured_lines)  — on normal completion (success or failure)
         (None, captured_lines)        — when stop_checker fired; caller should abort
     """
-    creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    # Launch batch workers below normal priority so a full-core run stays
+    # responsive (the GUI/main thread keeps its scheduling share). On Windows this
+    # rides alongside CREATE_NO_WINDOW; on POSIX we nice() the child in preexec_fn.
+    popen_kwargs = {}
+    if sys.platform == "win32":
+        creation_flags = subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS
+    else:
+        creation_flags = 0
+        popen_kwargs["preexec_fn"] = lambda: os.nice(10)
 
     process = subprocess.Popen(
         cmd,
@@ -90,6 +98,7 @@ def run_task(cmd, desc, input_path, log_callback, stop_checker, log_path,
         errors="replace",
         creationflags=creation_flags,
         env=env,
+        **popen_kwargs,
     )
 
     captured = []

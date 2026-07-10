@@ -1,3 +1,14 @@
+import os
+
+# Pin BLAS/OpenMP thread counts to 1 before anything imports numpy/scipy/tslearn.
+# The parent process runs global averaging (Soft-DTW barycenter) in-process; its
+# concurrency is bounded explicitly by the chunk-pool worker count, so BLAS must
+# not additionally fan out threads and oversubscribe cores. setdefault respects
+# any value the user already exported.
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+             "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
 import sys
 from pathlib import Path
 from PySide6.QtWidgets import QApplication, QSplashScreen

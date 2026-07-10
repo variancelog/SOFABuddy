@@ -13,6 +13,7 @@ A desktop GUI for mastering SOFA HRTF files and extracting diffuse-field HRTF (D
 ## Features
 
 - **Two-stage processing pipeline**: SOFA mastering (resample, LF extension, DF equalization, radius normalization, crop/window to target length) → DFHRTF extraction (smoothed magnitude curves and plots)
+- **Parallel batch processing**: jobs are grouped into chunks and run concurrently through a bounded worker pool (default: half of CPU cores), with per-file progress and failure reporting; worker subprocesses run at reduced priority so the GUI stays responsive during full-core runs
 - **Multiple samplerates** in one run: 44.1 kHz, 48 kHz, 96 kHz
 - **Geometry-weighted diffuse-field calculation** using convex-hull solid-angle weights (accounts for hemispherical measurement grids missing lower elevations)
 - **Variable smoothing** (default): frequency-dependent Gaussian smoothing in log-frequency space, transitioning from 1-octave bandwidth at low frequencies to 1/12-octave at high frequencies (REW-psychoacoustic style); fixed 1/3–1/48-octave smoothing also available
@@ -79,7 +80,7 @@ Controls the SOFA mastering stage. Toggle **SOFA Outputs** on to enable.
 
 ### DFHRTF Tab
 
-Controls DFHRTF extraction and averaging. Toggle **DFHRTF Outputs** on to enable. When SOFA Outputs are also enabled the mastered SOFAs are used as the source; otherwise the raw imported files are used.
+Controls DFHRTF extraction and averaging. Toggle **DFHRTF Outputs** on to enable. When SOFA Outputs are also enabled the mastered SOFAs are used as the source (files whose mastering failed are skipped, never silently analyzed raw); otherwise the raw imported files are used.
 
 **Text Outputs**
 
@@ -191,7 +192,9 @@ Settings are automatically saved to `user_settings.json` whenever you start proc
 
 **Reset Settings** (main window toolbar) deletes `user_settings.json` and restores factory defaults.
 
-Advanced tunables not exposed in the UI can be edited directly in `user_settings.json`. Keys live under `sofa.advanced`, `dfhrtf.advanced`, and `averaging`. The app validates and sanitizes all JSON edits on load — out-of-range values are clamped and invalid choices are reverted to defaults with a warning in the console.
+Advanced tunables not exposed in the UI can be edited directly in `user_settings.json`. Keys live under `sofa.advanced`, `dfhrtf.advanced`, `averaging`, and `processing`. The app validates and sanitizes all JSON edits on load — out-of-range values are clamped and invalid choices are reverted to defaults with a warning in the console.
+
+Parallel execution is tuned under the `processing` key: `max_workers` (default `0` = auto, half of CPU cores) sets the concurrent worker-pool size, and `chunk_size` (default `16`) sets how many files each worker subprocess handles per batch.
 
 ## Running Tests
 
