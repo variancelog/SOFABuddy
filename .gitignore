@@ -17,6 +17,7 @@ plans/
 .claude
 CLAUDE.md
 graphify-out/
+hrtf_explorer.py
 
 # --- OS Specific ---
 .DS_Store

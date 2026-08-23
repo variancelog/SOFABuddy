@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import numpy as np
 
+from core.naming import render_filename
 from core.subprocess_utils import (
     new_run_log, run_chunks_parallel, chunk_jobs, write_manifest,
     effective_chunk_size, blas_guarded_env,
@@ -140,6 +141,10 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
         script_dfhrtf = os.path.join(scripts_dir, "generate_dfhrtf.py")
 
+        if not os.path.exists(script_dfhrtf):
+            error_callback(f"Backend script not found: {script_dfhrtf}")
+            return False
+
         # 1. Determine Output Mode (app-level setting from FilesTab)
         out_cfg = config.get('output', {})
         use_default = out_cfg.get('default', True)
@@ -253,8 +258,8 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             "grid_scale_high": float(dfhrtf_adv.get('weighted_grid_scale_high', 0.003)),
             "preserve_lr_balance": bool(dfhrtf_adv.get('preserve_lr_balance', True)),
             "var_smooth_freq_low": float(dfhrtf_adv.get('variable_smoothing_freq_low', 350.0)),
-            "var_smooth_freq_hi": float(dfhrtf_adv.get('variable_smoothing_freq_hi', 3000.0)),
-            "var_smooth_n_low": float(dfhrtf_adv.get('variable_smoothing_n_low', 1.0)),
+            "var_smooth_freq_hi": float(dfhrtf_adv.get('variable_smoothing_freq_hi', 6000.0)),
+            "var_smooth_n_low": float(dfhrtf_adv.get('variable_smoothing_n_low', 2.0)),
             "var_smooth_n_hi": float(dfhrtf_adv.get('variable_smoothing_n_hi', 12.0)),
             "var_smooth_gamma": float(dfhrtf_adv.get('variable_smoothing_gamma', 0.88)),
             "var_smooth_mean_mode": str(dfhrtf_adv.get('variable_smoothing_mean_mode', 'db')).lower(),
@@ -280,14 +285,20 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
 
             def get_text_path(lr_val, _base=base_name, _sr=sr_label, _ext=ext, _root=output_root, _tmpl=template, _folder=folder_name, _tilt=tilt_str):
-                fname = _tmpl.replace("{filename}", _base)
-                fname = fname.replace("{folder}", _folder)
-                fname = fname.replace("{samplerate}", _sr)
-                fname = fname.replace("{tilt}", _tilt)
-                fname = fname.replace("{LR}", lr_val)
-                # Remove {algo} and any preceding/succeeding underscores for per-sofa
-                fname = fname.replace("_{algo}", "").replace("{algo}_", "").replace("{algo}", "")
-                if not fname.endswith(_ext): fname += _ext
+                # {algo} is meaningless for per-SOFA outputs, so it is dropped
+                # along with an adjacent separator rather than substituted.
+                fname = render_filename(
+                    _tmpl,
+                    {
+                        "filename": _base,
+                        "folder": _folder,
+                        "samplerate": _sr,
+                        "tilt": _tilt,
+                        "LR": lr_val,
+                    },
+                    ext=_ext,
+                    drop={"algo"},
+                )
                 return os.path.join(_root, fname)
 
             if df_cfg.get('per_sofa_lr'):
@@ -308,8 +319,12 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 graph_template = df_cfg.get('graph_filename', "{filename}")
                 graph_ext = f".{df_cfg.get('graph_extension', 'png')}"
 
-                gname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{tilt}", tilt_str).replace("{graphtype}", "df")
-                if not gname.endswith(graph_ext): gname += graph_ext
+                gname = render_filename(
+                    graph_template,
+                    {"filename": base_name, "folder": folder_name,
+                     "tilt": tilt_str, "graphtype": "df"},
+                    ext=graph_ext,
+                )
                 job['graph_out'] = os.path.join(output_root, gname)
 
             if df_cfg.get('weighted_grid'):
@@ -320,16 +335,20 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 emit_weighted = (scope == 'All Files') or (output_root not in seen_grid_dirs)
                 if emit_weighted:
                     seen_grid_dirs.add(output_root)
-                    wname = graph_template.replace("{filename}", base_name).replace("{folder}", folder_name).replace("{tilt}", tilt_str).replace("{graphtype}", "weighted")
+                    wname = render_filename(
+                        graph_template,
+                        {"filename": base_name, "folder": folder_name,
+                         "tilt": tilt_str, "graphtype": "weighted"},
+                    )
 
                     # Fallback: if {graphtype} wasn't used in the template, append '_weighted'
                     if "{graphtype}" not in graph_template:
-                        if wname.endswith(graph_ext):
+                        if wname.lower().endswith(graph_ext.lower()):
                             wname = wname[:-len(graph_ext)] + "_weighted" + graph_ext
                         else:
                             wname += "_weighted" + graph_ext
                     else:
-                        if not wname.endswith(graph_ext): wname += graph_ext
+                        wname = render_filename(wname, {}, ext=graph_ext)
 
                     job['graph_weighted_out'] = os.path.join(output_root, wname)
 
@@ -414,13 +433,18 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 os.makedirs(out_dir, exist_ok=True)
 
                 def get_avg_path(lr_val, _dir=out_dir, _tmpl=avg_template, _ext=ext, _algo=short_algo, _tilt=tilt_str, _folder=grp['folder']):
-                    fname = _tmpl.replace("{filename}", "dfhrtfs_avg")
-                    fname = fname.replace("{folder}", _folder)
-                    fname = fname.replace("{samplerate}", "all")
-                    fname = fname.replace("{tilt}", _tilt)
-                    fname = fname.replace("{LR}", lr_val)
-                    fname = fname.replace("{algo}", _algo)
-                    if not fname.endswith(_ext): fname += _ext
+                    fname = render_filename(
+                        _tmpl,
+                        {
+                            "filename": "dfhrtfs_avg",
+                            "folder": _folder,
+                            "samplerate": "all",
+                            "tilt": _tilt,
+                            "LR": lr_val,
+                            "algo": _algo,
+                        },
+                        ext=_ext,
+                    )
                     return os.path.join(_dir, fname)
 
                 res_l = run_averaging(grp['l'], algo, exclude, get_avg_path("L"), delim,
@@ -435,11 +459,12 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                     try:
                         from core.plotting import plot_diffuse_field
                         gext = f".{df_cfg.get('graph_extension', 'png')}"
-                        gname = (avg_graph_template
-                                 .replace("{folder}", grp['folder'])
-                                 .replace("{tilt}", tilt_str)
-                                 .replace("{graphtype}", "df"))
-                        if not gname.endswith(gext): gname += gext
+                        gname = render_filename(
+                            avg_graph_template,
+                            {"folder": grp['folder'], "tilt": tilt_str,
+                             "graphtype": "df"},
+                            ext=gext,
+                        )
                         freqs_l, db_l = res_l
                         _, db_r = res_r
                         plot_diffuse_field(freqs_l, db_l, db_r,

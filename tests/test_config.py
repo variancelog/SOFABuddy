@@ -18,9 +18,6 @@ from pathlib import Path
 
 import pytest
 
-# Ensure project root is on the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from core import config as C
 
 

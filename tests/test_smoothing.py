@@ -12,14 +12,24 @@ def _log_freqs(start=20.0, stop=20000.0, num=600):
 
 class TestSmoothingParams:
     def test_defaults_match_factory_settings(self):
-        # Guards against drift between the dataclass and default_settings.json.
+        """The dataclass defaults must equal the `dfhrtf.advanced.
+        variable_smoothing_*` values in core/default_settings.json.
+
+        Reads the JSON rather than restating literals, so the assertion cannot
+        become a tautology when the factory settings change.  (The argparse and
+        dfhrtf_processor arms of the same contract are covered by
+        tests/test_defaults_parity.py::test_variable_smoothing_four_way_sync.)
+        """
+        import core.config as C
+
+        adv = C.load_defaults()["dfhrtf"]["advanced"]
         p = SmoothingParams()
-        assert p.freq_low == 350.0
-        assert p.freq_hi == 3000.0
-        assert p.n_low == 1.0
-        assert p.n_hi == 12.0
-        assert p.gamma == 0.88
-        assert p.mean_mode == "db"
+        assert p.freq_low  == adv["variable_smoothing_freq_low"]
+        assert p.freq_hi   == adv["variable_smoothing_freq_hi"]
+        assert p.n_low     == adv["variable_smoothing_n_low"]
+        assert p.n_hi      == adv["variable_smoothing_n_hi"]
+        assert p.gamma     == adv["variable_smoothing_gamma"]
+        assert p.mean_mode == adv["variable_smoothing_mean_mode"]
 
 
 class TestSmoothingProfile:

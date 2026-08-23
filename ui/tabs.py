@@ -6,7 +6,7 @@ from PySide6.QtCore import Signal, Qt
 from ui.widgets import FlameToggleButton, FlameDropdown, FlameNumericSlider, FlameLabel, FlameLineEdit
 from ui.theme import BG_WIDGET, BG_CONTROL, ACCENT, FG, CONTROL_HEIGHT
 from core.sofa_utils import get_sofa_metadata, calculate_max_itd, calculate_grid_radius, get_grid_cartesian
-from core.config import schema_bounds
+from core.config import load_defaults, schema_bounds, schema_default
 
 
 class _FilePathItem(QListWidgetItem):
@@ -402,7 +402,6 @@ class SofaTab(QWidget):
         self.btn_sr_44k.setToolTip("<p>Include 44.1kHz SOFA file.</p>")
         self.btn_sr_48k = FlameToggleButton("48k")
         self.btn_sr_48k.setToolTip("<p>Include 48kHz SOFA file.</p>")
-        self.btn_sr_48k.setChecked(True)
         self.btn_sr_96k = FlameToggleButton("96k")
         self.btn_sr_96k.setToolTip("<p>Include 96kHz SOFA file. More useful for bat HRTFs than human ones.</p>")
         sr_layout.addWidget(self.btn_sr_44k)
@@ -413,10 +412,13 @@ class SofaTab(QWidget):
         self.btn_lf = FlameToggleButton("Extend LF")
         self.btn_lf.setToolTip("<p>Replaces HRIR magnitudes below the crossover frequency with an 'ideal' frequency response. Recommended for most measured SOFAs.</p>")
         _xmin, _xmax = schema_bounds("sofa.xover", (200.0, 500.0))
-        self.slider_xover = FlameNumericSlider("Crossover Hz", _xmin, _xmax, 5.0, 1000.0)
+        self.slider_xover = FlameNumericSlider(
+            "Crossover Hz", _xmin, _xmax, 5.0, schema_default("sofa", "xover")
+        )
         self.slider_xover.setToolTip("<p>Crossover frequency for Extend LF function. 1000Hz works best in most cases.</p>")
         self.btn_lf.toggled.connect(self.slider_xover.setEnabled)
-        self.slider_xover.setEnabled(False)
+        # Enable-state is owned entirely by set_config() (called at the end of
+        # __init__) — never hand-set here, or it desyncs from lf_extension.
         lf_xover_layout.addWidget(self.btn_lf)
         lf_xover_layout.addWidget(self.slider_xover)
 
@@ -426,15 +428,16 @@ class SofaTab(QWidget):
         self.btn_uneq.setToolTip("<p>Include SOFAs with unequalized frequency response. Useful to obtain HRTF/DFHRTF responses.</p>")
         self.btn_dfeq = FlameToggleButton("DF-EQ'd")
         self.btn_dfeq.setToolTip("<p>Include SOFAs with diffuse-field equalized freqency response. Useful in binaural rendering applications and to view DTFs.</p>")
-        self.btn_dfeq.setChecked(True)
         eq_layout.addWidget(self.btn_uneq)
         eq_layout.addWidget(self.btn_dfeq)
 
         dist_layout = QHBoxLayout()
         self.btn_dist = FlameToggleButton("Normalize Grid Radius")
         self.btn_dist.setToolTip("<p>Normalizes grid radius to a user-defined distance. Useful for comparing HRTFs across labs. Enabling this setting overrides the default peak normalization (useful to prevent clipping in binaural renderers).</p>")
-        self.btn_dist.setChecked(True)
-        self.slider_dist = FlameNumericSlider("m", 1.0, 2.0, 0.1, 1.2)
+        _dmin, _dmax = schema_bounds("sofa.distance_m", (1.0, 2.0))
+        self.slider_dist = FlameNumericSlider(
+            "m", _dmin, _dmax, 0.1, schema_default("sofa", "distance_m")
+        )
         self.slider_dist.setToolTip("<p>Grid radius in metres.</p>")
         self.btn_dist.toggled.connect(self.slider_dist.setEnabled)
         dist_layout.addWidget(self.btn_dist)
@@ -443,21 +446,33 @@ class SofaTab(QWidget):
         ild_layout = QHBoxLayout()
         self.btn_ild = FlameToggleButton("Balance ILDs")
         self.btn_ild.setToolTip("<p>Correct left/right diffuse-field level (ILD) calibration offsets in the mastered SOFA. A split-level scalar gain is applied symmetrically to L and R, preserving ITD and per-direction HRIR structure. Only corrects when the estimated ILD exceeds the threshold.</p>")
-        self.btn_ild.setChecked(True)
+        _imin, _imax = schema_bounds("sofa.ild_threshold", (0.1, 3.0))
         self.slider_ild = FlameNumericSlider(
-            "dB", 0.1, 3.0, 0.1, 1.5,
-            allowed_values=[round(i * 0.1, 1) for i in range(1, 31)]
+            "dB", _imin, _imax, 0.1, schema_default("sofa", "ild_threshold"),
+            allowed_values=[
+                round(v * 0.1, 1)
+                for v in range(int(round(_imin * 10)), int(round(_imax * 10)) + 1)
+            ]
         )
         self.slider_ild.setToolTip("<p>ILD correction threshold in dB. Files whose estimated diffuse-field ILD (300–4000 Hz) exceeds this value are corrected. Calibration offsets are typically ≥ 1.5 dB; genuine acoustic ILD is usually &lt; 0.5 dB.</p>")
         self.btn_ild.toggled.connect(self.slider_ild.setEnabled)
         ild_layout.addWidget(self.btn_ild)
         ild_layout.addWidget(self.slider_ild)
 
-        self.slider_length = FlameNumericSlider("Samples", 128.0, 1024.0, 128.0, 512.0)
-        self.slider_length.setToolTip("<p>Output HRIR sample length. 512 recommended for most cases.</p>")
+        _lmin, _lmax = schema_bounds("sofa.hrir_length", (128.0, 1024.0))
+        self.slider_length = FlameNumericSlider(
+            "Samples", float(_lmin), float(_lmax), 128.0,
+            schema_default("sofa", "hrir_length")
+        )
+        self.slider_length.setToolTip(
+            "<p>Output HRIR sample length. 256 (the default) is recommended for most "
+            "cases — with the 1 kHz LF crossover it is spectrally equivalent to 512 "
+            "while halving the output size. Longer lengths only help if you need the "
+            "extra time-domain tail.</p>"
+        )
 
         self.lbl_naming = FlameLabel("SOFA Naming:")
-        self.edit_naming = FlameLineEdit("{filename}_{samplerate}_{eq}")
+        self.edit_naming = FlameLineEdit(schema_default("sofa", "naming"))
         self.edit_naming.setToolTip("<p>Naming of output SOFA files. Can include static text and the following variables: {filename} (original SOFA filename); {folder} (source file's parent folder name); {samplerate} (samplerate of processed SOFA file); {eq} (uneq or dfeq)</p>")
 
         # --- Apply configurations from above
@@ -484,6 +499,11 @@ class SofaTab(QWidget):
         self.container_layout.addLayout(grid)
         self.layout.addWidget(self.container)
         self.layout.addStretch()
+
+        # Belt: the factory defaults always reach the user through set_config(),
+        # which is also what handles the dependent enable-state syncing. No
+        # construction literal above can be what the user actually sees.
+        self.set_config(load_defaults().get("sofa", {}))
 
     def _on_enable_toggled(self, checked):
         self.container.setEnabled(checked)
@@ -513,29 +533,34 @@ class SofaTab(QWidget):
 
     def set_config(self, cfg: dict) -> None:
         """Restore all SOFA tab widgets from a saved config dict (surfaced keys only)."""
-        srs = cfg.get('samplerates', [48000])
+        srs = cfg.get('samplerates', schema_default('sofa', 'samplerates'))
         self.btn_sr_44k.set_value(44100 in srs)
         self.btn_sr_48k.set_value(48000 in srs)
         self.btn_sr_96k.set_value(96000 in srs)
 
-        self.btn_lf.set_value(bool(cfg.get('lf_extension', False)))
-        self.slider_xover.set_value(cfg.get('xover', 1000.0))
-        self.btn_uneq.set_value(bool(cfg.get('uneq', False)))
-        self.btn_dfeq.set_value(bool(cfg.get('dfeq', True)))
-        self.btn_ild.set_value(bool(cfg.get('ild_fix', True)))
-        self.slider_ild.set_value(cfg.get('ild_threshold', 1.5))
-        self.btn_dist.set_value(bool(cfg.get('normalize_distance', True)))
-        self.slider_dist.set_value(cfg.get('distance_m', 1.2))
-        self.slider_length.set_value(cfg.get('hrir_length', 512))
-        self.edit_naming.setText(cfg.get('naming', '{filename}_{samplerate}_{eq}'))
+        lf_extension      = bool(cfg.get('lf_extension', schema_default('sofa', 'lf_extension')))
+        ild_fix           = bool(cfg.get('ild_fix', schema_default('sofa', 'ild_fix')))
+        normalize_distance = bool(cfg.get('normalize_distance',
+                                          schema_default('sofa', 'normalize_distance')))
+
+        self.btn_lf.set_value(lf_extension)
+        self.slider_xover.set_value(cfg.get('xover', schema_default('sofa', 'xover')))
+        self.btn_uneq.set_value(bool(cfg.get('uneq', schema_default('sofa', 'uneq'))))
+        self.btn_dfeq.set_value(bool(cfg.get('dfeq', schema_default('sofa', 'dfeq'))))
+        self.btn_ild.set_value(ild_fix)
+        self.slider_ild.set_value(cfg.get('ild_threshold', schema_default('sofa', 'ild_threshold')))
+        self.btn_dist.set_value(normalize_distance)
+        self.slider_dist.set_value(cfg.get('distance_m', schema_default('sofa', 'distance_m')))
+        self.slider_length.set_value(cfg.get('hrir_length', schema_default('sofa', 'hrir_length')))
+        self.edit_naming.setText(cfg.get('naming', schema_default('sofa', 'naming')))
 
         # Sync slider enable states
-        self.slider_xover.setEnabled(bool(cfg.get('lf_extension', False)))
-        self.slider_ild.setEnabled(bool(cfg.get('ild_fix', True)))
-        self.slider_dist.setEnabled(bool(cfg.get('normalize_distance', True)))
+        self.slider_xover.setEnabled(lf_extension)
+        self.slider_ild.setEnabled(ild_fix)
+        self.slider_dist.setEnabled(normalize_distance)
 
         # Enable/disable the whole container (fires sofa_toggled signal)
-        enabled = bool(cfg.get('enabled', False))
+        enabled = bool(cfg.get('enabled', schema_default('sofa', 'enabled')))
         self.btn_enable.set_value(enabled)
         self.container.setEnabled(enabled)
         self.sofa_toggled.emit(enabled)
@@ -569,14 +594,14 @@ class DfhrtfTab(QWidget):
         # --- Text Outputs Section ---
         self.btn_per_sofa_lr = FlameToggleButton("Per SOFA L/R DFHRTFs")
         self.btn_per_sofa_lr.setToolTip("<p>Generates separate left ear and right ear DFHRTF magnitute response text files per source SOFA file.</p>")
-        self.btn_per_sofa_lr.setChecked(True)
         self.btn_per_sofa_avg = FlameToggleButton("Per SOFA Avg DFHRTFs")
         self.btn_per_sofa_avg.setToolTip("<p>Generates average of left ear + right ear DFHRTF magnitute response text files per source SOFA file.</p>")
         self.dd_per_sofa_avg_algo = FlameDropdown("Avg Algo")
         self.dd_per_sofa_avg_algo.setToolTip("<p>Averaging algorithm used for the per-SOFA L/R average. See README for details.</p>")
         self.dd_per_sofa_avg_algo.addItems(["Arithmetic Mean", "Geo-Arc-Length", "Soft-DTW"])
+        self.dd_per_sofa_avg_algo.set_value(schema_default("dfhrtf", "per_sofa_avg_algo"))
 
-        self.edit_text_filename = FlameLineEdit("text_{filename}_{LR}")
+        self.edit_text_filename = FlameLineEdit(schema_default("dfhrtf", "text_filename"))
         self.edit_text_filename.setToolTip(
             "<p>Naming of generated text files. Supported variables:</p> "
             "<p style='margin-top: 0px; margin-left: 10px;'>"
@@ -590,14 +615,15 @@ class DfhrtfTab(QWidget):
         self.dd_delimiter = FlameDropdown("Delimiter")
         self.dd_delimiter.setToolTip("<p>Text file delimiter.</p>")
         self.dd_delimiter.addItems(["Tab", "Comma", "Semicolon", "Space"])
+        self.dd_delimiter.set_value(schema_default("dfhrtf", "text_delimiter"))
         self.dd_text_ext = FlameDropdown("Extension")
         self.dd_text_ext.setToolTip("<p>Text file extension</p>")
         self.dd_text_ext.addItems(["txt", "csv"])
+        self.dd_text_ext.set_value(schema_default("dfhrtf", "text_extension"))
 
         # --- Graph Outputs Section ---
         self.btn_dfhrtf_graphs = FlameToggleButton("DFHRTF Graphs")
         self.btn_dfhrtf_graphs.setToolTip("<p>Enables diffuse field HRTF graph outputs. Left and right ears overlayed on one graph.</p>")
-        self.btn_dfhrtf_graphs.setChecked(True)
 
         self.dd_weighting_mode = FlameDropdown("Grid Weighting")
         self.dd_weighting_mode.setToolTip(
@@ -608,6 +634,7 @@ class DfhrtfTab(QWidget):
             "<b>Uniform</b>: always use equal 1/N weights.</p>"
         )
         self.dd_weighting_mode.addItems(["Auto", "Geometric", "Uniform"])
+        self.dd_weighting_mode.set_value(schema_default("dfhrtf", "weighting_mode"))
 
         self.btn_weighted_grid = FlameToggleButton("Weighted Grid")
         self.btn_weighted_grid.setToolTip(
@@ -620,8 +647,9 @@ class DfhrtfTab(QWidget):
             "<b>All Files</b>: one grid plot per SOFA file.</p>"
         )
         self.dd_weighted_scope.addItems(["Per Folder", "All Files"])
+        self.dd_weighted_scope.set_value(schema_default("dfhrtf", "weighted_grid_scope"))
 
-        self.edit_graph_filename = FlameLineEdit("graph_{filename}_{graphtype}")
+        self.edit_graph_filename = FlameLineEdit(schema_default("dfhrtf", "graph_filename"))
         self.edit_graph_filename.setToolTip(
             "<p>Naming of generated graph files. Supported variables:</p> "
             "<p style='margin-top: 0px; margin-left: 10px;'>"
@@ -634,23 +662,30 @@ class DfhrtfTab(QWidget):
         self.dd_graph_ext = FlameDropdown("Extension")
         self.dd_graph_ext.setToolTip("<p>Graph file extension.</p>")
         self.dd_graph_ext.addItems(["png", "jpg"])
+        self.dd_graph_ext.set_value(schema_default("dfhrtf", "graph_extension"))
 
         # --- Refinement Section ---
         self.dd_smoothing = FlameDropdown("Smoothing")
         self.dd_smoothing.addItems(["Variable", "1/3", "1/6", "1/12", "1/24", "1/48"])
+        self.dd_smoothing.set_value(schema_default("dfhrtf", "smoothing"))
         self.dd_smoothing.setToolTip(
             "<p>Smoothing applied to both text and graph outputs. "
             "'Variable' uses frequency-dependent smoothing (tunable via the "
             "dfhrtf.advanced.variable_smoothing_* keys in the settings JSON); "
             "'1/n' applies a fixed 1/n octave smoothing.</p>"
         )
-        self.slider_tilt = FlameNumericSlider(" Tilt dB/Oct", -2.0, 1.0, 0.1, 0.0)
+        _tmin, _tmax = schema_bounds("dfhrtf.tilt", (-2.0, 1.0))
+        self.slider_tilt = FlameNumericSlider(
+            " Tilt dB/Oct", _tmin, _tmax, 0.1, schema_default("dfhrtf", "tilt")
+        )
         self.slider_tilt.setToolTip("<p>Tilt dB/Oct, center frequency of 1kHz. Applies to both text and graph outputs.</p>")
 
         self.btn_extend_lf = FlameToggleButton("Extend LF")
         self.btn_extend_lf.setToolTip("<p>Extend and linerizes low frequency (LF) response below the crossover frequency. Not needed for simulated SOFA files or if Extend LF already applied to measured SOFA files.</p>")
         _xmin, _xmax = schema_bounds("dfhrtf.xover", (200.0, 500.0))
-        self.slider_xover = FlameNumericSlider("Crossover Hz", _xmin, _xmax, 5.0, 1000.0)
+        self.slider_xover = FlameNumericSlider(
+            "Crossover Hz", _xmin, _xmax, 5.0, schema_default("dfhrtf", "xover")
+        )
         self.slider_xover.setToolTip("<p>Crossover frequency for low frequency extenstion.</p>")
 
         # --- Post Processing Section ---
@@ -659,9 +694,9 @@ class DfhrtfTab(QWidget):
         self.dd_algo = FlameDropdown("Algo")
         self.dd_algo.setToolTip("<p>Averaging Algorithm used for averaging frequency responses. See README file for more information.</p>")
         self.dd_algo.addItems(["Arithmetic Mean", "Geo-Arc-Length", "Soft-DTW"])
+        self.dd_algo.set_value(schema_default("dfhrtf", "algo"))
         self.btn_exclude_outliers = FlameToggleButton("Exclude Outliers")
         self.btn_exclude_outliers.setToolTip("<p>Excludes measureuments that exceed STDEV > 1.0</p>")
-        self.btn_exclude_outliers.setChecked(True)
 
         # --- Connections for Dependency State ---
         for toggle in [self.btn_per_sofa_lr, self.btn_per_sofa_avg, self.btn_dfhrtf_graphs, self.btn_weighted_grid, self.btn_extend_lf, self.btn_avg_all]:
@@ -716,7 +751,10 @@ class DfhrtfTab(QWidget):
         self.layout.addWidget(self.container)
         self.layout.addStretch()
 
-        self._update_dependencies()
+        # Belt: the factory defaults always reach the user through set_config(),
+        # which also re-runs _update_dependencies() so every dependent
+        # enable-state is derived, never hand-set at construction.
+        self.set_config(load_defaults().get("dfhrtf", {}))
 
     def _on_enable_toggled(self, checked):
         self.container.setEnabled(checked)
@@ -775,34 +813,37 @@ class DfhrtfTab(QWidget):
 
     def set_config(self, cfg: dict) -> None:
         """Restore all DFHRTF tab widgets from a saved config dict (surfaced keys only)."""
-        self.btn_per_sofa_lr.set_value(bool(cfg.get('per_sofa_lr', True)))
-        self.btn_per_sofa_avg.set_value(bool(cfg.get('per_sofa_avg', False)))
-        self.dd_per_sofa_avg_algo.set_value(cfg.get('per_sofa_avg_algo', 'Arithmetic Mean'))
-        self.edit_text_filename.setText(cfg.get('text_filename', 'text_{filename}_{LR}'))
-        self.dd_delimiter.set_value(cfg.get('text_delimiter', 'Tab'))
-        self.dd_text_ext.set_value(cfg.get('text_extension', 'txt'))
+        def _d(key):
+            return cfg.get(key, schema_default('dfhrtf', key))
 
-        self.btn_dfhrtf_graphs.set_value(bool(cfg.get('dfhrtf_graphs', True)))
-        self.dd_weighting_mode.set_value(cfg.get('weighting_mode', 'Auto'))
-        self.btn_weighted_grid.set_value(bool(cfg.get('weighted_grid', False)))
-        self.dd_weighted_scope.set_value(cfg.get('weighted_grid_scope', 'Per Folder'))
-        self.edit_graph_filename.setText(cfg.get('graph_filename', 'graph_{filename}_{graphtype}'))
-        self.dd_graph_ext.set_value(cfg.get('graph_extension', 'png'))
+        self.btn_per_sofa_lr.set_value(bool(_d('per_sofa_lr')))
+        self.btn_per_sofa_avg.set_value(bool(_d('per_sofa_avg')))
+        self.dd_per_sofa_avg_algo.set_value(_d('per_sofa_avg_algo'))
+        self.edit_text_filename.setText(_d('text_filename'))
+        self.dd_delimiter.set_value(_d('text_delimiter'))
+        self.dd_text_ext.set_value(_d('text_extension'))
 
-        self.dd_smoothing.set_value(cfg.get('smoothing', 'Variable'))
-        self.slider_tilt.set_value(cfg.get('tilt', 0.0))
-        self.btn_extend_lf.set_value(bool(cfg.get('extend_lf', False)))
-        self.slider_xover.set_value(cfg.get('xover', 1000.0))
+        self.btn_dfhrtf_graphs.set_value(bool(_d('dfhrtf_graphs')))
+        self.dd_weighting_mode.set_value(_d('weighting_mode'))
+        self.btn_weighted_grid.set_value(bool(_d('weighted_grid')))
+        self.dd_weighted_scope.set_value(_d('weighted_grid_scope'))
+        self.edit_graph_filename.setText(_d('graph_filename'))
+        self.dd_graph_ext.set_value(_d('graph_extension'))
 
-        self.btn_avg_all.set_value(bool(cfg.get('avg_all', False)))
-        self.dd_algo.set_value(cfg.get('algo', 'Arithmetic Mean'))
-        self.btn_exclude_outliers.set_value(bool(cfg.get('exclude_outliers', True)))
+        self.dd_smoothing.set_value(_d('smoothing'))
+        self.slider_tilt.set_value(_d('tilt'))
+        self.btn_extend_lf.set_value(bool(_d('extend_lf')))
+        self.slider_xover.set_value(_d('xover'))
+
+        self.btn_avg_all.set_value(bool(_d('avg_all')))
+        self.dd_algo.set_value(_d('algo'))
+        self.btn_exclude_outliers.set_value(bool(_d('exclude_outliers')))
 
         # Re-run gating once after bulk restore so enabled/disabled state is correct
         self._update_dependencies()
 
         # Enable/disable the whole container (fires dfhrtf_toggled signal)
-        enabled = bool(cfg.get('enabled', False))
+        enabled = bool(_d('enabled'))
         self.btn_enable.set_value(enabled)
         self.container.setEnabled(enabled)
         self.dfhrtf_toggled.emit(enabled)

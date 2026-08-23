@@ -4,6 +4,7 @@ import sys
 import tempfile
 
 from core.dfhrtf_processor import SOFA_MASTERED_DIR  # shared constant
+from core.naming import render_filename
 from core.subprocess_utils import (
     new_run_log, run_chunks_parallel, chunk_jobs, write_manifest,
     effective_chunk_size, blas_guarded_env,
@@ -62,18 +63,18 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
             "norm_target_db":    float(sofa_adv.get('norm_target_db', -1.0)),
             "onset_buffer":      int(sofa_adv.get('onset_buffer', 32)),
             "onset_threshold":   float(sofa_adv.get('onset_threshold_ratio', 0.05)),
-            "blend_low_oct":     float(sofa_adv.get('blend_low_oct', 0.50)),
-            "blend_high_oct":    float(sofa_adv.get('blend_high_oct', 0.75)),
+            "blend_low_oct":     float(sofa_adv.get('blend_low_oct', 0.33)),
+            "blend_high_oct":    float(sofa_adv.get('blend_high_oct', 1.0)),
             "weighting_mode":    str(df_cfg.get('weighting_mode', 'Auto')).lower(),
             "ild_fix":           bool(sofa_cfg.get('ild_fix', True)),
-            "ild_threshold":     float(sofa_cfg.get('ild_threshold', 1.5)),
-            "ild_low_freq":      float(sofa_adv.get('ild_low_freq', 300.0)),
-            "ild_high_freq":     float(sofa_adv.get('ild_high_freq', 6000.0)),
+            "ild_threshold":     float(sofa_cfg.get('ild_threshold', 1.2)),
+            "ild_low_freq":      float(sofa_adv.get('ild_low_freq', 350.0)),
+            "ild_high_freq":     float(sofa_adv.get('ild_high_freq', 3500.0)),
             "harmonize_radius":  bool(sofa_cfg.get('normalize_distance', False)),
-            "target_radius":     float(sofa_cfg.get('distance_m', 1.2)),
+            "target_radius":     float(sofa_cfg.get('distance_m', 1.5)),
             "lf_extend":         bool(sofa_cfg.get('lf_extension', False)),
             "lf_crossover":      float(sofa_cfg.get('xover', 1000.0)),
-            "hrir_length":       int(sofa_cfg.get('hrir_length', 512)),
+            "hrir_length":       int(sofa_cfg.get('hrir_length', 256)),
         }
 
         # 2. Build Job List
@@ -94,13 +95,16 @@ def process_sofa_exports(config, progress_callback, log_callback, error_callback
                 for eq_label, dfeq_on in eq_modes:
                     folder_name = os.path.basename(os.path.dirname(file_path))
                     name_template = sofa_cfg.get('naming', "{filename}_{samplerate}_{eq}")
-                    out_filename = name_template.replace("{filename}", base_name)
-                    out_filename = out_filename.replace("{folder}", folder_name)
-                    out_filename = out_filename.replace("{samplerate}", str(sr))
-                    out_filename = out_filename.replace("{eq}", eq_label)
-
-                    if not out_filename.lower().endswith(".sofa"):
-                        out_filename += ".sofa"
+                    out_filename = render_filename(
+                        name_template,
+                        {
+                            "filename": base_name,
+                            "folder": folder_name,
+                            "samplerate": sr,
+                            "eq": eq_label,
+                        },
+                        ext=".sofa",
+                    )
 
                     out_path = os.path.join(out_root, out_filename)
 

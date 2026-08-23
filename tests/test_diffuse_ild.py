@@ -4,37 +4,40 @@ Pytest guard for the diffuse-field ILD audit engine (core/ild_audit.py).
 
 Test battery
 ------------
-1. Synthetic unit test  — inject a known ILD into a fake IR; assert
-   ild_estimate_db recovers it within 0.1 dB.
+1. Synthetic recovery    — inject a known ILD via the `ild_sofa` fixture; assert
+   ild_estimate_db recovers it within 0.15 dB.
 
-2. Round-trip fix test  — load BILI 1103-n (known offender), apply_ild_fix,
-   re-measure; assert residual < 0.3 dB and energy is preserved.
+2. Synthetic invariants  — round-trip an injected ILD through
+   diffuse_field_ild() -> apply_ild_fix() and pin the four properties the
+   correction promises: residual ILD ~0, gain_L * gain_R == 1, float32
+   representability survives, and ITD is untouched.
 
-3. Known-bad reference  — BILI 1103-n: assert lf_ild_db > LF_TOL and
-   verdict == 'calibration_offset'.
+3. LF-vs-HF decision     — an HF-only imbalance must NOT be called a
+   calibration offset, even when the broadband ILD is large.
 
-4. Healthy-file guard   — all other fixtures in tests/data/sofa/ must have
-   abs(lf_ild_db) <= LF_TOL and abs(broadband_ild_db) <= BROADBAND_TOL.
+4. Healthy-file guard    — all non-offender fixtures in tests/data/sofa/ must
+   have abs(lf_ild_db) <= LF_TOL and abs(broadband_ild_db) <= BROADBAND_TOL.
 
-SOFA tests require 'sofar'; they are skipped automatically if unavailable or
-if tests/data/sofa/ is empty.
+5. Known-offender guard  — fixtures with genuine LF-ILD (KNOWN_OFFENDERS) must
+   be flagged (abs(lf_ild_db) > LF_TOL).
+
+Tests 1-3 are fully synthetic and always run. Tests 4-5 exercise the real
+downloaded SOFA corpus, which is gitignored for size — they are marked
+`needs_sofa_fixtures` and skip loudly when tests/data/sofa/ holds no *.sofa
+files. See tests/data/sofa/README.md.
 """
 
+import glob
 import os
-import sys
 
 import numpy as np
 import pytest
 
-# Bootstrap import path so the test suite finds core.*.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from core.ild_audit import (
-    diffuse_field_ild,
     apply_ild_fix,
+    diffuse_field_ild,
     LF_TOL,
     BROADBAND_TOL,
-    ESTIMATE_BAND,
 )
 
 # ---------------------------------------------------------------------------
@@ -42,36 +45,64 @@ from core.ild_audit import (
 # ---------------------------------------------------------------------------
 
 SOFA_DIR = os.path.join(os.path.dirname(__file__), "data", "sofa")
-KNOWN_BAD = "BILI 1103-n.sofa"
-KNOWN_BAD_PATH = os.path.join(SOFA_DIR, KNOWN_BAD)
 
 # Fixtures with genuine LF-ILD that exceeds LF_TOL — these are known offenders,
 # not calibration-clean files, so they're excluded from the healthy-file guard
 # and instead asserted to be *flagged* by test_known_offenders_are_flagged below.
 KNOWN_OFFENDERS = {"measured_BILI.sofa", "measured_LISTEN.sofa"}
 
-_sofa_dir_exists = os.path.isdir(SOFA_DIR) and bool(os.listdir(SOFA_DIR))
+
+def _sofa_fixture_files():
+    """Every *.sofa file in tests/data/sofa/.
+
+    Globs for the extension specifically: a non-empty directory (e.g. one that
+    only holds README.md) is NOT fixture coverage.
+    """
+    return sorted(glob.glob(os.path.join(SOFA_DIR, "*.sofa")))
+
+
+_have_sofa_fixtures = bool(_sofa_fixture_files())
+
+_no_fixtures_reason = (
+    "no *.sofa files in tests/data/sofa/ — real-corpus regression tests need "
+    "the (gitignored) HRTF database files; see tests/data/sofa/README.md"
+)
+
 
 # ---------------------------------------------------------------------------
-# Helper: fake SOFA-like object (avoids importing sofar for pure-unit tests)
+# Helpers
 # ---------------------------------------------------------------------------
 
-class _FakeSofa:
-    """Minimal duck-type for diffuse_field_ild when we don't need sofar."""
+def _median_itd_samples(ir):
+    """Median cross-correlation lag (samples) between L and R across positions.
 
-    def __init__(self, ir, fs=44100.0):
-        M, R, N = ir.shape
-        # Uniform sphere grid: azimuth 0..360 step 6, elevation 0 only.
-        az = np.arange(0, 360, 6, dtype=float)           # 60 points
-        el = np.zeros_like(az)
-        r  = np.ones_like(az)
-        sp = np.column_stack([az, el, r])
-        # Make M match by tiling if needed.
-        if M != len(az):
-            sp = np.tile(sp, (int(np.ceil(M / len(sp))), 1))[:M]
-        self.Data_IR          = ir.copy()
-        self.Data_SamplingRate = fs
-        self.SourcePosition   = sp
+    Positive = L is delayed relative to R.
+    """
+    n = ir.shape[-1]
+    lags = [
+        int(np.argmax(np.correlate(ir[m, 0], ir[m, 1], mode="full"))) - (n - 1)
+        for m in range(ir.shape[0])
+    ]
+    return float(np.median(lags))
+
+
+def _planted_itd_sofa(ild_sofa, ild_db, itd_samples):
+    """A known-ILD SOFA whose L/R channels are the SAME signal, shifted apart.
+
+    `ild_sofa`'s default HRIRs are independent noise per ear, so an L-vs-R
+    cross-correlation lag is meaningless there. This rebuilds Data_IR from a
+    single shared source signal, delayed by +itd_samples/2 in L and
+    -itd_samples/2 in R, with the R channel attenuated by `ild_db`. Grid,
+    samplerate and convention all come from the fixture.
+    """
+    s = ild_sofa(ild_db)
+    src = np.asarray(s.Data_IR)[:, 0, :].copy()
+    half = itd_samples // 2
+    ir = np.empty_like(np.asarray(s.Data_IR))
+    ir[:, 0, :] = np.roll(src, half, axis=-1)
+    ir[:, 1, :] = np.roll(src, -half, axis=-1) * 10.0 ** (-ild_db / 20.0)
+    s.Data_IR = ir
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -79,23 +110,13 @@ class _FakeSofa:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("injected_db", [0.0, 2.0, -3.5, 5.0])
-def test_synthetic_ild_recovery(injected_db):
+def test_synthetic_ild_recovery(ild_sofa, injected_db):
     """ild_estimate_db should recover an injected ILD within 0.15 dB.
 
-    We synthesise white noise HRIRs for a uniform (60-point, elevation-0)
-    sphere grid and scale the R channel by the injected gain before measuring.
-    The estimation band (300–6 kHz) is used for the check because that is
-    what apply_ild_fix relies on.
+    The estimation band (ESTIMATE_BAND, 300-6 kHz) is what apply_ild_fix relies
+    on, so that is the quantity checked.
     """
-    rng = np.random.default_rng(42)
-    fs = 44100.0
-    M, N = 60, 256
-    ir = rng.standard_normal((M, 2, N))
-    # Inject ILD: scale R by the negative gain (positive injected_db → L louder)
-    ir[:, 1, :] *= 10.0 ** (-injected_db / 20.0)
-
-    fake = _FakeSofa(ir, fs=fs)
-    r = diffuse_field_ild(fake)
+    r = diffuse_field_ild(ild_sofa(injected_db))
 
     assert abs(r["ild_estimate_db"] - injected_db) < 0.15, (
         f"Injected {injected_db:.1f} dB; recovered {r['ild_estimate_db']:.3f} dB"
@@ -103,100 +124,167 @@ def test_synthetic_ild_recovery(injected_db):
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — round-trip fix: apply_ild_fix drives residual near 0 and
-#           preserves overall energy.  Requires BILI 1103-n.sofa.
+# Test 2 — round trip: measure -> correct -> re-measure leaves ~zero ILD
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skipif(
-    not _sofa_dir_exists or not os.path.isfile(KNOWN_BAD_PATH),
-    reason=f"{KNOWN_BAD} not found in tests/data/sofa/",
-)
-def test_ild_fix_round_trip():
-    """apply_ild_fix should reduce ild_estimate_db to near 0 dB without
-    significantly changing total energy."""
-    sofar = pytest.importorskip("sofar", reason="sofar not installed")
+@pytest.mark.parametrize("injected_db", [3.7, -3.7])
+def test_ild_fix_round_trip_residual_is_negligible(ild_sofa, injected_db):
+    """diffuse_field_ild -> apply_ild_fix -> diffuse_field_ild must land on ~0 dB.
 
-    sofa = sofar.read_sofa(KNOWN_BAD_PATH)
-    r_before = diffuse_field_ild(sofa)
+    With synthetic data there is no measurement noise, so the correction is
+    exact to numerical precision; anything above 1e-9 dB means the estimate and
+    the applied gain have drifted out of agreement (e.g. a factor-of-2 or sign
+    error in the split).
+    """
+    s = ild_sofa(injected_db)
+    before = diffuse_field_ild(s)
+    assert abs(before["ild_estimate_db"] - injected_db) < 0.15
 
-    apply_ild_fix(sofa, r_before["ild_estimate_db"])
-    r_after = diffuse_field_ild(sofa)
+    apply_ild_fix(s, before["ild_estimate_db"])
+    after = diffuse_field_ild(s)
 
-    # Residual ILD should be negligible.
-    assert abs(r_after["ild_estimate_db"]) < 0.3, (
-        f"Residual ILD after fix: {r_after['ild_estimate_db']:.3f} dB "
-        f"(expected < 0.3 dB)"
-    )
-
-    # The per-channel gains satisfy gain_L * gain_R = 1 (amplitude), so
-    # neither individual channel is wildly scaled.  For a ~3.7 dB ILD with
-    # real channel energy imbalance, total energy shifts ~6–8%.  Assert each
-    # channel moves by less than half the original ILD in dB terms (i.e. the
-    # correction is split, not over-applied to one side).
-    ir_after = np.asarray(sofa.Data_IR, dtype=float)
-    ir_before_arr = np.asarray(sofar.read_sofa(KNOWN_BAD_PATH).Data_IR, dtype=float)
-    for r_idx, label in enumerate(("L", "R")):
-        eL_before = np.sum(ir_before_arr[:, r_idx, :] ** 2)
-        eL_after  = np.sum(ir_after[:, r_idx, :] ** 2)
-        change_db = abs(10.0 * np.log10((eL_after + 1e-12) / (eL_before + 1e-12)))
-        half_ild  = abs(r_before["ild_estimate_db"]) / 2.0 + 0.2  # allow small margin
-        assert change_db < half_ild + 0.5, (
-            f"Channel {label} energy changed by {change_db:.2f} dB after fix "
-            f"(expected ≈ {half_ild:.2f} dB = half the ILD)"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test 3 — known-bad reference: BILI 1103-n is a calibration offset
-# ---------------------------------------------------------------------------
-
-@pytest.mark.skipif(
-    not _sofa_dir_exists or not os.path.isfile(KNOWN_BAD_PATH),
-    reason=f"{KNOWN_BAD} not found in tests/data/sofa/",
-)
-def test_known_bad_bili_1103():
-    """BILI 1103-n.sofa is the canonical offender: large, flat-band ILD that
-    persists into LF — a calibration error, not an acoustic phenomenon."""
-    sofar = pytest.importorskip("sofar", reason="sofar not installed")
-
-    sofa = sofar.read_sofa(KNOWN_BAD_PATH)
-    r = diffuse_field_ild(sofa)
-
-    assert r["verdict"] == "calibration_offset", (
-        f"Expected verdict 'calibration_offset' for {KNOWN_BAD}; "
-        f"got '{r['verdict']}' (lf_ild_db={r['lf_ild_db']:.2f} dB)"
-    )
-    assert abs(r["lf_ild_db"]) > LF_TOL, (
-        f"Expected |lf_ild_db| > {LF_TOL} dB for {KNOWN_BAD}; "
-        f"got {r['lf_ild_db']:.2f} dB"
-    )
-    assert abs(r["ild_estimate_db"]) > BROADBAND_TOL, (
-        f"Expected |ild_estimate_db| > {BROADBAND_TOL} dB for {KNOWN_BAD}; "
-        f"got {r['ild_estimate_db']:.2f} dB"
+    assert abs(after["ild_estimate_db"]) < 1e-9, (
+        f"Residual ILD after correction: {after['ild_estimate_db']:.3e} dB "
+        f"(injected {injected_db} dB)"
     )
 
 
+def test_ild_fix_gain_product_is_unity(ild_sofa):
+    """The split correction must satisfy gain_L * gain_R == 1.
+
+    This is the documented energy-neutrality invariant of apply_ild_fix: L is
+    attenuated by X/2 dB and R boosted by X/2 dB, so the geometric mean of the
+    two channel amplitudes is preserved. Measured through the public API by
+    comparing per-channel sample ratios before and after.
+    """
+    s = ild_sofa(3.7)
+    before = np.asarray(s.Data_IR).copy()
+
+    apply_ild_fix(s, 3.7)
+    after = np.asarray(s.Data_IR)
+
+    gain_L = after[:, 0, :] / before[:, 0, :]
+    gain_R = after[:, 1, :] / before[:, 1, :]
+
+    # Each channel gain must be a single scalar (no frequency/direction shaping).
+    np.testing.assert_allclose(gain_L, gain_L.flat[0], rtol=1e-12)
+    np.testing.assert_allclose(gain_R, gain_R.flat[0], rtol=1e-12)
+
+    assert gain_L.flat[0] * gain_R.flat[0] == pytest.approx(1.0, abs=1e-12), (
+        f"gain_L * gain_R = {gain_L.flat[0] * gain_R.flat[0]!r}, expected 1.0"
+    )
+    # And the correction went the right way: positive ILD (L louder) attenuates L.
+    assert gain_L.flat[0] < 1.0 < gain_R.flat[0]
+
+
+def test_ild_fix_preserves_float32_representability(ild_sofa):
+    """float32-precision source data must stay float32-representable.
+
+    Real measured HRTFs are stored at float32 precision. Multiplying by a
+    float64 gain fills the lower mantissa bits, destroying the compressibility
+    of the written file and roughly doubling its size — a silent failure mode
+    with no functional symptom. apply_ild_fix detects float32-precision input
+    and rounds back; this pins that behavior.
+    """
+    s = ild_sofa(3.7)
+    ir_f32 = np.asarray(s.Data_IR).astype(np.float32).astype(np.float64)
+    s.Data_IR = ir_f32
+
+    apply_ild_fix(s, 3.7)
+    out = np.asarray(s.Data_IR)
+
+    assert np.array_equal(out, out.astype(np.float32).astype(np.float64)), (
+        "apply_ild_fix upcast float32-precision data to true float64 — the "
+        "written SOFA would roughly double in size."
+    )
+
+
+def test_ild_fix_preserves_itd(ild_sofa):
+    """A planted +/-6-sample ITD must survive the ILD correction untouched.
+
+    apply_ild_fix applies a frequency-flat scalar per channel, so inter-aural
+    *timing* is by construction unaffected. This guards against a future
+    "improvement" that reaches for a filter and silently smears the ITD — the
+    single most perceptually important cue in an HRTF.
+    """
+    s = _planted_itd_sofa(ild_sofa, ild_db=3.7, itd_samples=6)
+
+    before_itd = _median_itd_samples(np.asarray(s.Data_IR).copy())
+    assert before_itd == 6.0, f"planted ITD not measurable: got {before_itd}"
+
+    r = diffuse_field_ild(s)
+    assert abs(r["ild_estimate_db"] - 3.7) < 0.15
+
+    apply_ild_fix(s, r["ild_estimate_db"])
+    after_itd = _median_itd_samples(np.asarray(s.Data_IR))
+
+    assert after_itd == before_itd, (
+        f"ITD changed from {before_itd} to {after_itd} samples across the "
+        f"ILD correction"
+    )
+
+
 # ---------------------------------------------------------------------------
-# Test 4 — healthy-file guard: all fixtures except the known offender
+# Test 3 — the LF-vs-HF decision boundary
+# ---------------------------------------------------------------------------
+
+def test_hf_only_ild_is_not_flagged_as_calibration_offset(ild_sofa):
+    """A large HF-only ILD must read as 'acoustic_or_balanced', not an offset.
+
+    This is the whole premise of the audit: long wavelengths diffract around the
+    head symmetrically, so a genuine acoustic ILD vanishes below ~500 Hz while a
+    per-channel gain error does not. An 8 dB imbalance confined to 6-16 kHz is
+    the head/pinna kind — it must be kept, not "corrected" — even though the
+    broadband ILD it produces exceeds BROADBAND_TOL.
+    """
+    r = diffuse_field_ild(ild_sofa(8.0, band=(6000, 16000)))
+
+    assert r["band_ild_db"][(6000, 16000)] > 4.0, (
+        "premise failed: HF injection did not produce a large HF-band ILD"
+    )
+    assert abs(r["broadband_ild_db"]) > BROADBAND_TOL, (
+        "premise failed: the HF-only injection should still move the "
+        "broadband figure past BROADBAND_TOL — that is what makes this a "
+        "meaningful negative case"
+    )
+    assert abs(r["lf_ild_db"]) <= LF_TOL, (
+        f"lf_ild_db = {r['lf_ild_db']:.3f} dB — an HF-only injection must "
+        f"leave the 100-500 Hz band clean"
+    )
+    assert r["verdict"] == "acoustic_or_balanced", (
+        f"HF-only ILD wrongly verdicted '{r['verdict']}' — the LF band, not "
+        f"the broadband figure, must drive the calibration-offset call"
+    )
+
+
+def test_lf_only_ild_is_flagged_as_calibration_offset(ild_sofa):
+    """The positive half of the same boundary: an LF-band ILD IS flagged.
+
+    Paired with the HF case above, this pins both sides of the decision rule
+    rather than only the direction that happens to pass today.
+    """
+    r = diffuse_field_ild(ild_sofa(4.0, band=(100, 500)))
+
+    assert abs(r["lf_ild_db"]) > LF_TOL
+    assert r["verdict"] == "calibration_offset"
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — healthy-file guard: all fixtures except the known offenders
 # ---------------------------------------------------------------------------
 
 def _healthy_sofa_files():
     """Return (name, path) for every .sofa fixture that is NOT a known offender."""
-    if not _sofa_dir_exists:
-        return []
     return [
-        (f, os.path.join(SOFA_DIR, f))
-        for f in sorted(os.listdir(SOFA_DIR))
-        if f.endswith(".sofa") and f != KNOWN_BAD
-        and f not in KNOWN_OFFENDERS
-        and not f.endswith("_ildfix.sofa")
+        (os.path.basename(p), p)
+        for p in _sofa_fixture_files()
+        if os.path.basename(p) not in KNOWN_OFFENDERS
+        and not p.endswith("_ildfix.sofa")
     ]
 
 
-@pytest.mark.skipif(
-    not _sofa_dir_exists,
-    reason="tests/data/sofa/ is empty or missing",
-)
+@pytest.mark.needs_sofa_fixtures
+@pytest.mark.skipif(not _have_sofa_fixtures, reason=_no_fixtures_reason)
 @pytest.mark.parametrize("fname,fpath", _healthy_sofa_files())
 def test_healthy_sofa_fixtures(fname, fpath):
     """Healthy fixtures should have small LF-ILD and small broadband ILD."""
@@ -221,19 +309,15 @@ def test_healthy_sofa_fixtures(fname, fpath):
 
 def _known_offender_files():
     """Return (name, path) for known-offender fixtures present on disk."""
-    if not _sofa_dir_exists:
-        return []
     return [
-        (f, os.path.join(SOFA_DIR, f))
-        for f in sorted(os.listdir(SOFA_DIR))
-        if f in KNOWN_OFFENDERS
+        (os.path.basename(p), p)
+        for p in _sofa_fixture_files()
+        if os.path.basename(p) in KNOWN_OFFENDERS
     ]
 
 
-@pytest.mark.skipif(
-    not _sofa_dir_exists,
-    reason="tests/data/sofa/ is empty or missing",
-)
+@pytest.mark.needs_sofa_fixtures
+@pytest.mark.skipif(not _have_sofa_fixtures, reason=_no_fixtures_reason)
 @pytest.mark.parametrize("fname,fpath", _known_offender_files())
 def test_known_offenders_are_flagged(fname, fpath):
     """Known-offender fixtures (genuine LF-ILD) must exceed LF_TOL — this is a

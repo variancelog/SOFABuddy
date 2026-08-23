@@ -21,6 +21,44 @@ except ImportError:  # older scipy: sph_harm(m, l, azimuth, colat)
         return _sph_harm_old(abs(m), l, az, col)
 
 
+def real_sph_harm(l, m, col, az):
+    """Real-valued spherical harmonic Y_l^m evaluated at (colatitude, azimuth).
+
+    Uses the standard real-SH construction from the complex harmonics, including
+    the Condon-Shortley sign convention factor ``sqrt(2) * (-1)**m``:
+
+        m < 0 :  sqrt(2) * (-1)**m * Im{Y_l^|m|}
+        m = 0 :  Re{Y_l^0}
+        m > 0 :  sqrt(2) * (-1)**m * Re{Y_l^m}
+
+    Parameters
+    ----------
+    l : int
+        Degree (>= 0).
+    m : int
+        Order, -l <= m <= l.
+    col : array_like
+        Colatitude in radians (0 at +z).
+    az : array_like
+        Azimuth in radians.
+
+    Returns
+    -------
+    ndarray of real values, same shape as `col`/`az`.
+
+    This is the single source of truth for the sign convention — the spherical
+    design classifier below and the quadrature-error checks in
+    tests/test_weighting_classifier.py all go through it, so the convention can
+    only ever be changed in one place.
+    """
+    Y = _sh_complex(l, m, col, az)
+    if m < 0:
+        return np.sqrt(2) * (-1) ** m * Y.imag
+    if m > 0:
+        return np.sqrt(2) * (-1) ** m * Y.real
+    return Y.real
+
+
 def spherical_to_cartesian(r, az, el):
     """Convert spherical (r, az, el) in degrees to Cartesian (x, y, z)."""
     az_rad = np.radians(az)
@@ -67,13 +105,7 @@ def _is_equal_weight_design(cart_coords, tol=1e-6):
     col = np.arccos(np.clip(z / r, -1, 1))
     for l in range(1, test_order + 1):
         for m in range(-l, l + 1):
-            Y = _sh_complex(l, m, col, az)
-            if m < 0:
-                Yr = np.sqrt(2) * (-1) ** m * Y.imag
-            elif m > 0:
-                Yr = np.sqrt(2) * (-1) ** m * Y.real
-            else:
-                Yr = Y.real
+            Yr = real_sph_harm(l, m, col, az)
             if abs(4 * np.pi / N * np.sum(Yr)) > tol:
                 return False
     return True

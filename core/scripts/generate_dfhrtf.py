@@ -232,7 +232,15 @@ def run_manifest(manifest_path):
     return exit_code
 
 
-def main():
+def build_parser():
+    """Construct the CLI argument parser.
+
+    Module-level (rather than inline in main()) so tests can derive a complete
+    default Namespace via `vars(build_parser().parse_args([]))` instead of
+    hand-copying defaults. `--input` is deliberately not argparse-`required`;
+    main() enforces it with parser.error() after parsing, so parse_args([])
+    yields a full default namespace.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=str, default=None,
                         help="Path to a JSON manifest for chunked/parallel batch processing "
@@ -274,9 +282,9 @@ def main():
     # Variable smoothing tunables (used when --smoothing variable)
     parser.add_argument("--var-smooth-freq-low",  type=float, default=350.0,
                         help="Frequency (Hz) at/below which smoothing is fixed at 1/n_low octave")
-    parser.add_argument("--var-smooth-freq-hi",   type=float, default=3000.0,
+    parser.add_argument("--var-smooth-freq-hi",   type=float, default=6000.0,
                         help="Frequency (Hz) at/above which smoothing is fixed at 1/n_hi octave")
-    parser.add_argument("--var-smooth-n-low",     type=float, default=1.0,
+    parser.add_argument("--var-smooth-n-low",     type=float, default=2.0,
                         help="Octave-fraction denominator at freq_low (1 = full octave)")
     parser.add_argument("--var-smooth-n-hi",      type=float, default=12.0,
                         help="Octave-fraction denominator at freq_hi")
@@ -298,7 +306,12 @@ def main():
     parser.add_argument("--preserve-lr-balance", action="store_true",
                         help="Normalize L and R with a single shared 1 kHz reference "
                              "(mean of L/R) to preserve the real inter-aural level offset")
-    
+
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.manifest:

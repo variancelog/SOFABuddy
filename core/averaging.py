@@ -66,13 +66,38 @@ class DataIngestor:
         Returns a DataFrame with standardized 'frequency' and 'magnitude' columns.
         """
         try:
+            # save_text_data() only writes a header row for .csv output --
+            # every other delimiter/extension combo is headerless, so the
+            # header can't be assumed; letting pandas default to header=0
+            # on a headerless file eats the lowest-frequency row as column
+            # names. Detect it by checking whether the first row's first
+            # field parses as a number.
+            with open(filepath, 'r') as fh:
+                first_line = fh.readline().strip()
+            first_token = first_line
+            for sep_char in (',', ';', '\t'):
+                if sep_char in first_line:
+                    first_token = first_line.split(sep_char)[0]
+                    break
+            else:
+                first_token = first_line.split()[0] if first_line.split() else first_line
+            try:
+                float(first_token)
+                header_arg = None
+            except ValueError:
+                header_arg = 0
+
             # Attempt to read CSV with pandas
-            df = pd.read_csv(filepath)
-            
-            # Basic validation: need at least 2 columns
+            df = pd.read_csv(filepath, header=header_arg)
+
+            # Basic validation: need at least 2 columns; comma is pandas'
+            # default, so fall back through the other delimiters generate_
+            # dfhrtf.py's text_delimiter setting can actually produce.
             if len(df.columns) < 2:
-                # Try space or tab separated
-                df = pd.read_csv(filepath, sep=r'\s+')
+                for sep in (';', r'\s+'):
+                    df = pd.read_csv(filepath, sep=sep, header=header_arg)
+                    if len(df.columns) >= 2:
+                        break
                 if len(df.columns) < 2:
                     raise ValueError(f"File {os.path.basename(filepath)} does not have at least two columns.")
 

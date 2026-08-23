@@ -1,21 +1,21 @@
 """
-tests/audit_diffuse_ild.py
+tools/audit_diffuse_ild.py
 Standalone CLI auditor for diffuse-field inter-aural level difference (ILD)
 in raw SOFA files.
 
 Usage
 -----
     # Audit all .sofa files in a folder (defaults to tests/data/sofa/)
-    python tests/audit_diffuse_ild.py
+    python tools/audit_diffuse_ild.py
 
     # Audit a specific folder with a tighter threshold
-    python tests/audit_diffuse_ild.py path/to/sofa/files --diff 1.5
+    python tools/audit_diffuse_ild.py path/to/sofa/files --diff 1.5
 
     # Flag AND correct offenders (writes <name>_ildfix.sofa alongside sources)
-    python tests/audit_diffuse_ild.py --fix
+    python tools/audit_diffuse_ild.py --fix
 
     # Geometric weighting mode, no corrections
-    python tests/audit_diffuse_ild.py --weighting-mode geometric
+    python tools/audit_diffuse_ild.py --weighting-mode geometric
 
 Exit code
 ---------

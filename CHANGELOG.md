@@ -1,3 +1,17 @@
+## v0.5.0 (2026-08-22)
+
+### Added
+- **`core/naming.py`**: single implementation of output-filename template substitution (`render_filename()`), replacing five separate ad hoc `.replace()` chains previously duplicated across `sofa_processor.py` and `dfhrtf_processor.py`.
+- **`core/config.py`**: `schema_default(section, key)` reads a single factory default out of `default_settings.json`. `ui/tabs.py` now sources every widget construction default and `set_config()` fallback from it instead of hardcoded literals, so the JSON is the sole source of truth for what the UI shows.
+- **`core/geometry_weights.py`**: extracted the real-valued spherical-harmonic construction (with Condon–Shortley sign convention) into `real_sph_harm()`, now the single source of truth shared by the design classifier and its test suite.
+- Test suite substantially expanded and reorganized (126 → 353 collected tests): `pytest.ini` (markers `qt`, `needs_sofa_fixtures`, `slow`; `xfail_strict = true`) and `tests/conftest.py` (shared argparse-derived fixtures, synthetic SOFA factories, automatic Qt marking) centralize what was previously duplicated per-test setup. `requirements-dev.txt` split out test-only deps (`pytest`, `pytest-qt`).
+- Former ad hoc diagnostic scripts under `tests/` are now proper maintainer tools under `tools/`: `tools/audit_diffuse_ild.py`, `tools/grid_comparator.py`, `tools/weighting_lab.py` (renamed from `_grid_comparator.py` / `compare_weighting_grids.py`), plus new `tools/extract_grid_fixtures.py`.
+
+### Fixed
+- **Three-way default-value desync** between the GUI, CLI, and processor fallback paths, all now guarded by `tests/test_defaults_parity.py`: `ui/tabs.py` widget construction literals, `core/sofa_processor.py`'s `dict.get(..., <fallback>)` literals, and `generate_dfhrtf.py`'s `--var-smooth-*` argparse defaults had each drifted independently from `default_settings.json`. Corrected values (JSON is authoritative): SOFA `hrir_length` default is now **256** samples (was 512 in the UI/processor fallback) — spectrally equivalent given the 1 kHz LF crossover, at half the file size; `distance_m` 1.5 m (was 1.2); `ild_threshold` 1.2 dB over a 350–3500 Hz band (was 1.5 dB over 300–6000 Hz); LF-splice `blend_low_oct`/`blend_high_oct` 0.33/1.0 (was 0.50/0.75); variable-smoothing `freq_hi`/`n_low` 6000 Hz/2.0 in the CLI path (was 3000 Hz/1.0, matching what the JSON/GUI path already used — see `core/smoothing.py`'s `SmoothingParams`).
+- `process_dfhrtf_exports()` now checks the DFHRTF backend script exists before running, matching the guard already present on the SOFA processor — previously a missing/misnamed `generate_dfhrtf.py` failed asymmetrically compared to a missing `generate_sofa.py`.
+- `core/averaging.py`'s `DataIngestor` assumed `header=0` unconditionally when reading averaging-input text files; for the headerless space/tab/semicolon-delimited files `generate_dfhrtf.py`'s text output can produce, this ate the lowest-frequency row as a column name. Now detects header presence by checking whether the first row's first field parses as a number.
+
 ## v0.4.1 (2026-07-09)
 
 ### Fixed

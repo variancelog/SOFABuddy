@@ -4,7 +4,7 @@ Interactive SOFA measurement-grid comparator.
 
 Usage
 -----
-    python tests/grid_comparator.py [sofa_file ...]
+    python tools/grid_comparator.py [sofa_file ...]
 
 Drag and drop additional .sofa files onto the window at any time.
 
@@ -49,7 +49,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  registers '3d' projection
 
-from compare_weighting_grids import (
+from weighting_lab import (
     spherical_to_cartesian,
     _clean_source_pos,
     geometric_weights_original,

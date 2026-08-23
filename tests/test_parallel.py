@@ -24,7 +24,6 @@ import re
 import sys
 import threading
 
-import numpy as np
 import pytest
 import sofar as sf
 
@@ -94,101 +93,20 @@ class TestChunkJobs:
 
 # ── 2. Manifest round-trip ──────────────────────────────────────────────────────
 
-def _fibonacci_sphere(n):
-    """n points ~evenly on the unit sphere; returns (az_deg, el_deg)."""
-    i = np.arange(0, n, dtype=float) + 0.5
-    phi = np.arccos(1 - 2 * i / n)
-    theta = np.pi * (1 + 5 ** 0.5) * i
-    x = np.cos(theta) * np.sin(phi)
-    y = np.sin(theta) * np.sin(phi)
-    z = np.cos(phi)
-    az = np.degrees(np.arctan2(y, x))
-    el = np.degrees(np.arcsin(np.clip(z, -1, 1)))
-    return az, el
+# Synthetic SOFA builders and the manifest "common" dicts now live in
+# tests/conftest.py (fixtures: synthetic_sofa_file, sofa_common, dfhrtf_common).
+# The overrides passed at each call site below are this module's deliberate
+# deviations from the shipped argparse defaults: the SOFA baseline this suite
+# has always used (target_radius 1.5, hrir_length 256), and DFHRTF
+# speed-optimizations (small n_fft, coarse output grid) plus preserve_lr_balance.
 
-
-def _make_sofa_file(path, fs=48000, n_points=96, n_taps=64, n_samples=256):
-    """Write a tiny synthetic SimpleFreeFieldHRIR SOFA file to *path*."""
-    az, el = _fibonacci_sphere(n_points)
-    M = len(az)
-
-    tail = 0.5 ** np.arange(n_taps)
-    burst = np.zeros(n_taps)
-    burst[0] = 1.0
-    burst += 0.4 * tail
-
-    onset = 40
-    ir = np.zeros((M, 2, n_samples), dtype=float)
-    for m in range(M):
-        ir[m, 0, onset:onset + n_taps] = 0.30 * burst
-        ir[m, 1, onset:onset + n_taps] = 0.28 * burst
-
-    s = sf.Sofa("SimpleFreeFieldHRIR")
-    s.Data_IR = ir
-    s.Data_SamplingRate = float(fs)
-    s.SourcePosition = np.column_stack((az, el, np.full(M, 1.5)))
-    sf.write_sofa(str(path), s)
-    return str(path)
-
-
-def _sofa_common(**overrides):
-    base = dict(
-        processing_length=2048,
-        norm_target_db=-1.0,
-        onset_buffer=32,
-        onset_threshold=0.05,
-        blend_low_oct=0.50,
-        blend_high_oct=0.75,
-        weighting_mode="auto",
-        ild_fix=False,
-        ild_threshold=1.5,
-        ild_low_freq=300.0,
-        ild_high_freq=6000.0,
-        harmonize_radius=False,
-        target_radius=1.5,
-        lf_extend=False,
-        lf_crossover=1000.0,
-        hrir_length=256,
-    )
-    base.update(overrides)
-    return base
-
-
-def _dfhrtf_common(**overrides):
-    base = dict(
-        avg_algo="Arithmetic Mean",
-        delimiter="\t",
-        smoothing="variable",
-        tilt=0.0,
-        lr_avg_gamma=0.01,
-        lf_ext_dfhrtf=False,
-        lf_ext_dfhrtf_xover=1000.0,
-        n_fft=4096,
-        output_octave_fraction=12,
-        norm_freq_hz=1000.0,
-        lf_blend_low_oct=0.50,
-        lf_blend_high_oct=1.0,
-        stereo_angle=30.0,
-        advanced_dfeq=True,
-        weighting_mode="auto",
-        grid_scale_mode="auto",
-        grid_scale_low=0.001,
-        grid_scale_high=0.003,
-        preserve_lr_balance=True,
-        var_smooth_freq_low=350.0,
-        var_smooth_freq_hi=3000.0,
-        var_smooth_n_low=1.0,
-        var_smooth_n_hi=12.0,
-        var_smooth_gamma=0.88,
-        var_smooth_mean_mode="db",
-    )
-    base.update(overrides)
-    return base
+_DFHRTF_FAST = dict(n_fft=4096, output_octave_fraction=12, preserve_lr_balance=True)
+_SOFA_BASELINE = dict(target_radius=1.5, hrir_length=256)
 
 
 class TestSofaManifestRoundTrip:
-    def test_mixed_ok_and_fail_jobs(self, tmp_path, capsys):
-        good_input = _make_sofa_file(tmp_path / "src.sofa")
+    def test_mixed_ok_and_fail_jobs(self, tmp_path, capsys, synthetic_sofa_file, sofa_common):
+        good_input = synthetic_sofa_file(tmp_path / "src.sofa", n_points=96, onset=40)
         missing_input = str(tmp_path / "does_not_exist.sofa")
 
         out1 = tmp_path / "out1.sofa"
@@ -200,7 +118,7 @@ class TestSofaManifestRoundTrip:
             {"input": missing_input, "output": str(out_bad), "target_fs": 48000, "dfeq": False},
             {"input": good_input, "output": str(out2), "target_fs": 48000, "dfeq": True},
         ]
-        manifest_path = write_manifest(str(tmp_path), _sofa_common(), jobs)
+        manifest_path = write_manifest(str(tmp_path), sofa_common(**_SOFA_BASELINE), jobs)
 
         exit_code = sofa_run_manifest(manifest_path)
         out = capsys.readouterr().out
@@ -217,8 +135,8 @@ class TestSofaManifestRoundTrip:
 
 
 class TestDfhrtfManifestRoundTrip:
-    def test_mixed_ok_and_fail_jobs(self, tmp_path, capsys):
-        good_input = _make_sofa_file(tmp_path / "src.sofa")
+    def test_mixed_ok_and_fail_jobs(self, tmp_path, capsys, synthetic_sofa_file, dfhrtf_common):
+        good_input = synthetic_sofa_file(tmp_path / "src.sofa", n_points=96, onset=40)
         missing_input = str(tmp_path / "does_not_exist.sofa")
 
         text_l1, text_r1 = tmp_path / "f1_L.txt", tmp_path / "f1_R.txt"
@@ -230,7 +148,7 @@ class TestDfhrtfManifestRoundTrip:
             {"input": missing_input, "text_out_l": str(text_l_bad)},
             {"input": good_input, "text_out_l": str(text_l2), "text_out_r": str(text_r2)},
         ]
-        manifest_path = write_manifest(str(tmp_path), _dfhrtf_common(), jobs)
+        manifest_path = write_manifest(str(tmp_path), dfhrtf_common(**_DFHRTF_FAST), jobs)
 
         exit_code = dfhrtf_run_manifest(manifest_path)
         out = capsys.readouterr().out
@@ -393,11 +311,11 @@ class TestSanitizeRoomType:
         sanitize_sofa(s)
         assert s.GLOBAL_RoomType == expected
 
-    def test_sanitized_room_type_survives_write(self, tmp_path):
+    def test_sanitized_room_type_survives_write(self, tmp_path, synthetic_sofa_file):
         # Reproduces the reported failure: a "free-field" RoomType is accepted
         # on read but rejected by sf.write_sofa's convention check unless
         # normalized first.
-        src_path = _make_sofa_file(tmp_path / "src.sofa")
+        src_path = synthetic_sofa_file(tmp_path / "src.sofa", n_points=96, onset=40)
         s2 = sf.read_sofa(src_path)
         s2.GLOBAL_RoomType = "free-field"
         sanitize_sofa(s2)

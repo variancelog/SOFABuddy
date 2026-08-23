@@ -3,8 +3,8 @@ tests/test_weighting_classifier.py
 Objective comparison of the new spherical-design quadrature classifier against
 the legacy geo-weight-CV heuristic for the auto weighting mode.
 
-Requires only numpy and scipy (no Qt, no SOFA files for the core battery).
-SOFA-file tests are skipped automatically if netCDF4/sofar is unavailable.
+Requires only numpy and scipy — no Qt, and no SOFA files at all: the real-grid
+coverage reads committed .npy SourcePosition arrays rather than .sofa binaries.
 
 Grid battery
 ------------
@@ -15,8 +15,16 @@ Grid battery
     Lebedev_N10, Sphere_ICO, Sphere_UV, Default (Mesh2HRTF Nodes.txt)
     Equiangular full sphere                     (synthetic)
     Near-uniform Fibonacci sphere               (synthetic)
-    Real measured SOFA grids                    (tests/data/sofa/, optional)
+    Real measured SOFA grids                    (tests/data/grids/*.npy, committed)
+
+Real-grid fixtures
+------------------
+The real ``.sofa`` corpus is gitignored (size), so the "real measured grids are
+not spherical designs" guard reads committed ``SourcePosition`` arrays from
+``tests/data/grids/*.npy`` instead of the SOFA files themselves. Regenerate them
+with ``python tools/extract_grid_fixtures.py``.
 """
+import glob
 import os
 import sys
 import math
@@ -24,10 +32,9 @@ import math
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 from core.geometry_weights import (
     calculate_geometric_weights,
+    real_sph_harm,
     spherical_to_cartesian,
     _is_equal_weight_design,
 )
@@ -37,7 +44,7 @@ from core.geometry_weights import (
 # ---------------------------------------------------------------------------
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-SOFA_DIR = os.path.join(DATA_DIR, 'sofa')
+GRID_DIR = os.path.join(DATA_DIR, 'grids')
 
 
 # ---------------------------------------------------------------------------
@@ -174,12 +181,17 @@ def _build_full_battery():
     return _build_file_battery() + _build_synthetic_battery()
 
 
+# Built exactly once at import time — every parametrized consumer reuses this
+# list instead of re-loading every Nodes.txt on each reference.
+_FULL_BATTERY = _build_full_battery()
+
+
 # ---------------------------------------------------------------------------
 # Test 1 — new classifier is 100% accurate on the whole battery
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("name,sp,expected", _build_full_battery(),
-                         ids=[x[0] for x in _build_full_battery()])
+@pytest.mark.parametrize("name,sp,expected", _FULL_BATTERY,
+                         ids=[x[0] for x in _FULL_BATTERY])
 def test_new_classifier_correct(name, sp, expected):
     """New spherical-design test must give the right label for every grid."""
     got = _new_decision(sp)
@@ -216,15 +228,11 @@ def test_old_cv_heuristic_misclassifies_a_real_design():
 # ---------------------------------------------------------------------------
 
 def _worst_sh_residual(cart_coords, test_order=8):
-    """Return the largest |4π/N Σ Yℓm| over ℓ=1..test_order, m=-ℓ..ℓ."""
-    # Reimplement inline so the test is self-contained w.r.t. the compat shim.
-    try:
-        from scipy.special import sph_harm_y as _shy
-        def _Y(l, m, col, az): return _shy(l, abs(m), col, az)
-    except ImportError:
-        from scipy.special import sph_harm as _shy
-        def _Y(l, m, col, az): return _shy(abs(m), l, az, col)
+    """Return the largest |4π/N Σ Yℓm| over ℓ=1..test_order, m=-ℓ..ℓ.
 
+    Uses the promoted `core.geometry_weights.real_sph_harm` so the
+    `sqrt(2)·(-1)^m` sign convention lives in exactly one place.
+    """
     N = len(cart_coords)
     x, y, z = cart_coords[:, 0], cart_coords[:, 1], cart_coords[:, 2]
     r = np.linalg.norm(cart_coords, axis=1)
@@ -233,10 +241,7 @@ def _worst_sh_residual(cart_coords, test_order=8):
     worst = 0.0
     for l in range(1, test_order + 1):
         for m in range(-l, l + 1):
-            Yc = _Y(l, m, col, az)
-            Yr = (np.sqrt(2) * (-1) ** m * Yc.imag if m < 0
-                  else np.sqrt(2) * (-1) ** m * Yc.real if m > 0
-                  else Yc.real)
+            Yr = real_sph_harm(l, m, col, az)
             res = abs(4 * math.pi / N * np.sum(Yr))
             if res > worst:
                 worst = res
@@ -287,14 +292,10 @@ def test_residual_separation_has_clean_margin():
 # ---------------------------------------------------------------------------
 
 def _sh_quadrature_error(weights, cart_coords, test_order=8):
-    """RMS quadrature error |4π Σ wᵢ Yℓm(i)| over ℓ=1..test_order."""
-    try:
-        from scipy.special import sph_harm_y as _shy
-        def _Y(l, m, col, az): return _shy(l, abs(m), col, az)
-    except ImportError:
-        from scipy.special import sph_harm as _shy
-        def _Y(l, m, col, az): return _shy(abs(m), l, az, col)
+    """RMS quadrature error |4π Σ wᵢ Yℓm(i)| over ℓ=1..test_order.
 
+    Shares `core.geometry_weights.real_sph_harm` with the classifier itself.
+    """
     N_kept = len(weights[weights > 0])
     x, y, z = cart_coords[:, 0], cart_coords[:, 1], cart_coords[:, 2]
     r = np.linalg.norm(cart_coords, axis=1)
@@ -303,10 +304,7 @@ def _sh_quadrature_error(weights, cart_coords, test_order=8):
     errors = []
     for l in range(1, test_order + 1):
         for m in range(-l, l + 1):
-            Yc = _Y(l, m, col, az)
-            Yr = (np.sqrt(2) * (-1) ** m * Yc.imag if m < 0
-                  else np.sqrt(2) * (-1) ** m * Yc.real if m > 0
-                  else Yc.real)
+            Yr = real_sph_harm(l, m, col, az)
             # Weighted integral: 4π Σ wᵢ Yℓm(i) — exact designs → 0
             errors.append(abs(4 * math.pi * np.dot(weights, Yr)))
     return float(np.sqrt(np.mean(np.array(errors) ** 2)))
@@ -445,40 +443,47 @@ def test_design_order_limitation_documented():
 
 
 # ---------------------------------------------------------------------------
-# Test 7 (optional) — real SOFA files are classified as non-designs
+# Test 7 — real measured grids are classified as non-designs
 # ---------------------------------------------------------------------------
+# These read committed (M, 3) SourcePosition arrays extracted from the real
+# .sofa corpus by tools/extract_grid_fixtures.py. The .sofa files themselves are
+# gitignored (1.6-11 MB each); the grid arrays are 4-40 KB, so this test runs on
+# a clean clone instead of skipping.
 
-def _load_sofa_sourcepos(sofa_path):
-    """Return SourcePosition array from a SOFA file (requires sofar/netCDF4)."""
-    import sofar
-    sofa = sofar.read_sofa(sofa_path)
-    return sofa.SourcePosition
+def _grid_fixture_paths():
+    return sorted(glob.glob(os.path.join(GRID_DIR, '*.npy')))
 
 
-@pytest.mark.skipif(
-    not os.path.isdir(SOFA_DIR) or not os.listdir(SOFA_DIR),
-    reason="tests/data/sofa/ is empty or missing"
-)
-def test_real_sofa_grids_classified_as_geometric():
-    """All real measured SOFA grids should be classified 'geometric' (not designs)."""
-    sofar = pytest.importorskip('sofar', reason="sofar not installed")
+def _grid_id(path):
+    return os.path.splitext(os.path.basename(path))[0]
 
-    sofa_files = [f for f in os.listdir(SOFA_DIR) if f.endswith('.sofa')]
-    assert sofa_files, "No .sofa files found in tests/data/sofa/"
 
-    misclassified = []
-    for fname in sofa_files:
-        path = os.path.join(SOFA_DIR, fname)
-        try:
-            sp = _load_sofa_sourcepos(path)
-        except Exception as e:
-            pytest.skip(f"Could not load {fname}: {e}")
-            continue
-        label = _new_decision(sp)
-        if label != 'geometric':
-            misclassified.append(fname)
+def test_real_grid_fixtures_are_present():
+    """The committed .npy grid fixtures must exist — an empty tests/data/grids/
+    would silently turn the parametrized guard below into zero tests."""
+    paths = _grid_fixture_paths()
+    assert paths, (
+        f"No *.npy grid fixtures in {GRID_DIR}. Regenerate them from a local "
+        f".sofa corpus with: python tools/extract_grid_fixtures.py"
+    )
 
-    assert not misclassified, (
-        f"These real SOFA grids were incorrectly classified as 'uniform' designs: "
-        f"{misclassified}"
+
+@pytest.mark.parametrize("grid_path", _grid_fixture_paths(),
+                         ids=[_grid_id(p) for p in _grid_fixture_paths()])
+def test_real_sofa_grids_classified_as_geometric(grid_path):
+    """Every real measured/simulated HRTF grid must classify as 'geometric'.
+
+    None of these are spherical t/n-designs, so equal 1/N weighting is not
+    exact for them and the classifier must not snap them to uniform.
+    """
+    sp = np.load(grid_path)
+    assert sp.ndim == 2 and sp.shape[1] == 3, (
+        f"{_grid_id(grid_path)}: expected an (M, 3) SourcePosition array, "
+        f"got shape {sp.shape}"
+    )
+
+    label = _new_decision(sp)
+    assert label == 'geometric', (
+        f"{_grid_id(grid_path)}: real grid incorrectly classified as a "
+        f"'uniform' spherical design"
     )

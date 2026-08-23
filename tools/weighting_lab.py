@@ -1,4 +1,4 @@
-"""compare_weighting_grids.py
+"""weighting_lab.py
 
 Standalone test utility that generates two weighted-grid comparison plots for a
 single SOFA file — one per weighting method — so you can visually inspect the
@@ -6,8 +6,8 @@ difference between them.
 
 Usage
 -----
-    python tests/compare_weighting_grids.py --input path/to/file.sofa
-    python tests/compare_weighting_grids.py --input path/to/file.sofa --out-dir path/to/output/
+    python tools/weighting_lab.py --input path/to/file.sofa
+    python tools/weighting_lab.py --input path/to/file.sofa --out-dir path/to/output/
 
 Output
 ------

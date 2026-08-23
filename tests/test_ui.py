@@ -4,7 +4,6 @@ from PySide6.QtGui import QMouseEvent
 from ui.widgets import FlameToggleButton, FlameNumericSlider
 from ui.tabs import SofaTab, FilesTab
 from ui.main_window import SofaBuddyMainWindow
-from ui.workers import ProcessingWorker
 
 def test_flame_toggle_button(qtbot):
     btn = FlameToggleButton("Test")
@@ -65,35 +64,67 @@ def test_flame_numeric_slider_discrete(qtbot):
     slider.mouseMoveEvent(event)
     assert slider.get_value() == 48
 
-def test_sofa_tab_config(qtbot):
+def test_sofa_tab_enable_toggle_is_isolated(qtbot):
+    """Clicking the master toggle flips only `enabled` and nothing else.
+
+    Behavioral, not value-based: what the individual controls *default* to is
+    pinned against default_settings.json in tests/test_widget_defaults.py, so
+    duplicating those literals here would just re-create the drift this suite
+    is meant to catch.
+    """
     tab = SofaTab()
     qtbot.addWidget(tab)
-    
-    qtbot.mouseClick(tab.btn_enable, Qt.MouseButton.LeftButton)
-    
-    config = tab.get_config()
-    assert config['enabled'] is True
-    assert config['samplerates'] == [48000]
-    assert config['phase_mode'] == "Original Phase"
-    assert config['lf_extension'] is False
-    assert config['xover'] == 1000.0
-    assert config['normalize_distance'] is True
-    assert config['distance_m'] == 1.2
-    assert config['hrir_length'] == 512.0
-    assert config['naming'] == "{filename}_{samplerate}_{eq}"
 
-def test_dfhrtf_tab_config(qtbot):
+    before = tab.get_config()
+    assert before['enabled'] is False
+    assert tab.container.isEnabled() is False
+
+    qtbot.mouseClick(tab.btn_enable, Qt.MouseButton.LeftButton)
+
+    after = tab.get_config()
+    assert after['enabled'] is True
+    assert tab.container.isEnabled() is True
+    assert {k: v for k, v in after.items() if k != 'enabled'} == \
+           {k: v for k, v in before.items() if k != 'enabled'}
+
+    # ...and back again.
+    qtbot.mouseClick(tab.btn_enable, Qt.MouseButton.LeftButton)
+    assert tab.get_config() == before
+    assert tab.container.isEnabled() is False
+
+
+def test_sofa_tab_enable_toggle_emits_signal(qtbot):
+    tab = SofaTab()
+    qtbot.addWidget(tab)
+
+    seen = []
+    tab.sofa_toggled.connect(seen.append)
+
+    qtbot.mouseClick(tab.btn_enable, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(tab.btn_enable, Qt.MouseButton.LeftButton)
+    assert seen == [True, False]
+
+
+def test_dfhrtf_tab_enable_toggle_is_isolated(qtbot):
     from ui.tabs import DfhrtfTab
     tab = DfhrtfTab()
     qtbot.addWidget(tab)
-    
+
+    before = tab.get_config()
+    assert before['enabled'] is False
+
     qtbot.mouseClick(tab.btn_enable, Qt.MouseButton.LeftButton)
-    
-    config = tab.get_config()
-    assert config['enabled'] is True
-    assert config['smoothing'] == "Variable"
-    assert config['tilt'] == 0.0
-    
+
+    after = tab.get_config()
+    assert after['enabled'] is True
+    assert tab.container.isEnabled() is True
+    assert {k: v for k, v in after.items() if k != 'enabled'} == \
+           {k: v for k, v in before.items() if k != 'enabled'}
+
+    qtbot.mouseClick(tab.btn_enable, Qt.MouseButton.LeftButton)
+    assert tab.get_config() == before
+
+
 def test_files_tab_config(qtbot):
     tab = FilesTab()
     qtbot.addWidget(tab)
@@ -139,10 +170,3 @@ def test_main_window_drag_drop_invalid(qtbot):
     
     assert window.tab_files.file_list.count() == 0
     assert "Error: Skipped invalid file" in window.console.toPlainText()
-
-def test_processing_worker_signals(qtbot):
-    config = {'files': ["test1.sofa"]}
-    worker = ProcessingWorker(config)
-    
-    with qtbot.waitSignals([worker.progress, worker.finished], timeout=2000):
-        worker.start()

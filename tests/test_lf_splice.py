@@ -12,11 +12,9 @@ physically bounded and tightly clustered (no per-position ~128-sample slips),
 even when the LF phase is deliberately chaotic — and it must equal an independent
 unwrap-immune group-delay computed from the same spectra.
 
-These tests build synthetic fixtures (mirroring `_make_sofa` in test_grid_norm.py)
-so no large binaries are needed. tests/ is gitignored -> `git add -f`.
+These tests build synthetic fixtures (the `measured_like_sofa` factory in
+tests/conftest.py) so no large binaries are needed.
 """
-
-import argparse
 
 import numpy as np
 import pytest
@@ -24,78 +22,22 @@ import scipy.signal as signal
 import scipy.fft as fft
 import sofar as sf
 
-from core.scripts.generate_sofa import master_sofa, PROCESSING_LENGTH
+from core.scripts.generate_sofa import master_sofa
 
 
 # --------------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------------- #
-def _fibonacci_sphere(n):
-    i = np.arange(0, n, dtype=float) + 0.5
-    phi = np.arccos(1 - 2 * i / n)
-    theta = np.pi * (1 + 5 ** 0.5) * i
-    x = np.cos(theta) * np.sin(phi)
-    y = np.sin(theta) * np.sin(phi)
-    z = np.cos(phi)
-    az = np.degrees(np.arctan2(y, x))
-    el = np.degrees(np.arcsin(np.clip(z, -1, 1)))
-    return az, el
-
-
-def _make_measured_like_sofa(n_points=120, fs=48000, n=256, lf_noise=True, seed=0):
-    """Synthetic SimpleFreeFieldHRIR whose LF content is near-zero with chaotic
-    phase (like a real measured HRTF), plus a per-position bulk delay + ITD.
-
-    A single-pole broadband burst placed at a known onset gives a well-behaved
-    mid/high band; when lf_noise is True the sub-~120 Hz band is replaced by tiny
-    random-phase content — the exact condition that baited the DC-unwrap slip.
-    """
-    rng = np.random.default_rng(seed)
-    az, el = _fibonacci_sphere(n_points)
-    M = len(az)
-    freqs = fft.rfftfreq(n, 1.0 / fs)
-    lf = freqs < 120.0
-
-    tail = 0.5 ** np.arange(64)
-    burst = np.zeros(64)
-    burst[0] = 1.0
-    burst += 0.4 * tail
-
-    onset = 50
-    ir = np.zeros((M, 2, n), dtype=float)
-    for m in range(M):
-        # small per-position ITD so delays are not identical
-        itd = int(round(6 * np.sin(np.radians(az[m])) * np.cos(np.radians(el[m]))))
-        for r, lvl in ((0, 0.30), (1, 0.28)):
-            o = onset + (itd if r == 0 else -itd)
-            ir[m, r, o:o + 64] = lvl * burst
-        if lf_noise:
-            H = fft.rfft(ir[m], axis=-1)
-            # tiny magnitude, random phase in the LF band -> unwrap bait
-            amp = 1e-4 * np.max(np.abs(H))
-            noise = amp * np.exp(1j * rng.uniform(-np.pi, np.pi, size=(2, lf.sum())))
-            H[:, lf] = noise
-            ir[m] = fft.irfft(H, n=n, axis=-1)
-
-    s = sf.Sofa("SimpleFreeFieldHRIR")
-    s.Data_IR = ir
-    s.Data_SamplingRate = float(fs)
-    s.SourcePosition = np.column_stack((az, el, np.full(M, 1.5)))
-    return s
-
-
-def _args(**overrides):
-    base = dict(
-        harmonize_radius=False, target_radius=1.5,
-        lf_extend=True, lf_crossover=1000.0,
-        weighting_mode="auto", hrir_length=512, dfeq=False,
-        processing_length=PROCESSING_LENGTH, norm_target_db=-1.0,
-        onset_buffer=32, onset_threshold=0.05,
-        blend_low_oct=0.50, blend_high_oct=0.75,
-        ild_fix=False, debug_dump=None,
-    )
-    base.update(overrides)
-    return argparse.Namespace(**base)
+@pytest.fixture
+def lf_args(sofa_args):
+    """generate_sofa args with this module's non-default baseline
+    (lf_extend on, target_radius 1.5, hrir_length 512); everything else is the
+    real argparse default, via the shared `sofa_args` fixture in conftest.py."""
+    def _make(**overrides):
+        base = dict(lf_extend=True, target_radius=1.5, hrir_length=512, dfeq=False)
+        base.update(overrides)
+        return sofa_args(**base)
+    return _make
 
 
 def _group_delay_ref(H_raw, freqs, band):
@@ -119,14 +61,14 @@ def _group_delay_ref(H_raw, freqs, band):
 # Tests
 # --------------------------------------------------------------------------- #
 class TestLFDelayUnwrapImmunity:
-    def test_delay_bounded_and_clustered_on_noisy_lf(self, tmp_path):
+    def test_delay_bounded_and_clustered_on_noisy_lf(self, tmp_path, measured_like_sofa, lf_args):
         """With chaotic near-zero LF phase, the applied per-position delay must
         stay physically bounded and tightly clustered — no ~128-sample slips.
         The pre-fix single-point estimate produced bimodal delays here."""
-        raw = _make_measured_like_sofa(lf_noise=True)
+        raw = measured_like_sofa(lf_noise=True)
         npz = tmp_path / "dump.npz"
         master_sofa(raw, 48000, False, str(tmp_path / "o.sofa"),
-                    _args(debug_dump=str(npz)))
+                    lf_args(debug_dump=str(npz)))
         d = dict(np.load(npz))
         fs = float(d["target_fs"]); ob = int(d["onset_buffer"])
         delay = d["delay_sec_arr"] * fs                    # samples
@@ -140,13 +82,13 @@ class TestLFDelayUnwrapImmunity:
             f"a position slipped ~{spread.max():.0f} samples (half-slip={slip*0.5:.0f})")
         assert delay.std() < 25.0
 
-    def test_pipeline_delay_matches_independent_group_delay(self, tmp_path):
+    def test_pipeline_delay_matches_independent_group_delay(self, tmp_path, measured_like_sofa, lf_args):
         """The delay the pipeline actually applies equals an unwrap-immune
         group-delay recomputed independently from the dumped spectra."""
-        raw = _make_measured_like_sofa(lf_noise=True)
+        raw = measured_like_sofa(lf_noise=True)
         npz = tmp_path / "dump.npz"
         master_sofa(raw, 48000, False, str(tmp_path / "o.sofa"),
-                    _args(debug_dump=str(npz)))
+                    lf_args(debug_dump=str(npz)))
         d = dict(np.load(npz))
         freqs = d["freqs"]; xf = float(d["crossover_f"])
         f_lo = xf / (2 ** 0.50)
@@ -157,13 +99,13 @@ class TestLFDelayUnwrapImmunity:
 
 
 class TestLFSpliceMagnitude:
-    def test_below_crossover_shape_tracks_target(self, tmp_path):
+    def test_below_crossover_shape_tracks_target(self, tmp_path, measured_like_sofa, lf_args):
         """The spliced LF diffuse-field magnitude tracks the scaled reference in
         SHAPE below the exact-match edge (anchor/level offset removed)."""
-        raw = _make_measured_like_sofa(lf_noise=True)
+        raw = measured_like_sofa(lf_noise=True)
         npz = tmp_path / "dump.npz"
         out_path = tmp_path / "o.sofa"
-        master_sofa(raw, 48000, False, str(out_path), _args(debug_dump=str(npz)))
+        master_sofa(raw, 48000, False, str(out_path), lf_args(debug_dump=str(npz)))
         d = dict(np.load(npz))
         freqs = d["freqs"]; xf = float(d["crossover_f"])
         f_lo = xf / (2 ** 0.50)
@@ -189,13 +131,13 @@ class TestLFSpliceMagnitude:
 
 
 class TestLFSpliceCleanControl:
-    def test_clean_file_delay_is_stable(self, tmp_path):
+    def test_clean_file_delay_is_stable(self, tmp_path, measured_like_sofa, lf_args):
         """A clean (no-LF-noise) file yields a well-behaved delay too — the fix
         must not perturb the well-conditioned case."""
-        raw = _make_measured_like_sofa(lf_noise=False)
+        raw = measured_like_sofa(lf_noise=False)
         npz = tmp_path / "dump.npz"
         master_sofa(raw, 48000, False, str(tmp_path / "o.sofa"),
-                    _args(debug_dump=str(npz)))
+                    lf_args(debug_dump=str(npz)))
         d = dict(np.load(npz))
         fs = float(d["target_fs"])
         delay = d["delay_sec_arr"] * fs
@@ -228,20 +170,20 @@ class TestLFCrossoverDefault:
                 f"{key}={val} is outside the deduced LF-splice band "
                 f"[{lo}, {hi}]; a low crossover reintroduces the 256-sample ring")
 
-    def test_measured_like_fixture_256_512_equivalent_at_default(self, tmp_path):
+    def test_measured_like_fixture_256_512_equivalent_at_default(self, tmp_path, measured_like_sofa, lf_args):
         """At the shipped crossover, a rolled-off measured-like file's spliced
         diffuse-field magnitude is length-stable: 256 vs 512 samples agree in the
         LF band. This is the 256<->512 acceptance bar in miniature."""
         import core.config as C
         from core.geometry_weights import calculate_geometric_weights
         xover = float(C.load_defaults()["sofa"]["xover"])
-        raw = _make_measured_like_sofa(lf_noise=True)
+        raw = measured_like_sofa(lf_noise=True)
 
         def df_db(hrir_length):
             npz = tmp_path / f"d{hrir_length}.npz"
             out_path = tmp_path / f"o{hrir_length}.sofa"
             master_sofa(raw, 48000, False, str(out_path),
-                        _args(lf_crossover=xover, hrir_length=hrir_length,
+                        lf_args(lf_crossover=xover, hrir_length=hrir_length,
                               debug_dump=str(npz)))
             d = dict(np.load(npz)); freqs = d["freqs"]
             out = sf.read_sofa(str(out_path))

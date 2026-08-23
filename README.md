@@ -74,8 +74,10 @@ Controls the SOFA mastering stage. Toggle **SOFA Outputs** on to enable.
 | Un-EQ'd | Include unequalized SOFA output variants |
 | DF-EQ'd | Include diffuse-field-equalized output variants |
 | Normalize Grid Radius | Harmonize all HRIRs to a target measurement distance |
-| Distance (m) | Target radius in metres (default 1.2 m) |
-| HRIR Length | Output impulse-response length in samples (default 512) |
+| Distance (m) | Target radius in metres (default 1.5 m) |
+| Balance ILDs | Estimate diffuse-field inter-aural level difference and correct it with a symmetric split-level gain when it exceeds the threshold |
+| ILD Threshold (dB) | Correction trigger threshold (default 1.2 dB) |
+| HRIR Length | Output impulse-response length in samples (default 256 — spectrally equivalent to 512 given the 1 kHz LF crossover, at half the file size) |
 | SOFA Naming | Filename template for output `.sofa` files |
 
 ### DFHRTF Tab
@@ -113,7 +115,7 @@ Controls DFHRTF extraction and averaging. Toggle **DFHRTF Outputs** on to enable
 | Extend LF | Linearize sub-crossover frequency response |
 | Crossover Hz | Transition frequency for LF extension (default 1000 Hz) |
 
-Variable smoothing's anchor frequencies, octave fractions, transition warp, and window-average mode are tunable in `user_settings.json` under the `dfhrtf.advanced.variable_smoothing_*` keys (defaults: 1/1 octave at/below 350 Hz → 1/12 octave at/above 3 kHz, gamma 0.88, dB-domain mean).
+Variable smoothing's anchor frequencies, octave fractions, transition warp, and window-average mode are tunable in `user_settings.json` under the `dfhrtf.advanced.variable_smoothing_*` keys (defaults: 1/2 octave at/below 350 Hz → 1/12 octave at/above 6 kHz, gamma 0.88, dB-domain mean).
 
 **Post Processing — global averaging**
 

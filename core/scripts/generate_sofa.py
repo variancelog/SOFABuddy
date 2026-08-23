@@ -463,7 +463,15 @@ def run_manifest(manifest_path):
     return exit_code
 
 
-def main():
+def build_parser():
+    """Construct the CLI argument parser.
+
+    Module-level (rather than inline in main()) so tests can derive a complete
+    default Namespace via `vars(build_parser().parse_args([]))` instead of
+    hand-copying defaults. `--input`/`--output` are deliberately not
+    argparse-`required`; main() enforces them with parser.error() after
+    parsing, so parse_args([]) yields a full default namespace.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=str, default=None,
                         help="Path to a JSON manifest for chunked/parallel batch processing "
@@ -515,6 +523,11 @@ def main():
     parser.add_argument("--debug-dump", type=str, default=None,
                         help="Path to write an .npz of internal splice/crop arrays for diagnostics.")
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.manifest:

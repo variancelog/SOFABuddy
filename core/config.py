@@ -12,6 +12,7 @@ Cascaded JSON configuration management for SOFA Buddy.
 
 Qt-free API  (safe to import in subprocess scripts without a QApplication):
   load_defaults() -> dict
+  schema_default(section, key) -> value
   load_merged(user_path=None) -> (cfg, warnings)
   validate(cfg) -> (cfg, warnings)
 
@@ -61,6 +62,39 @@ def schema_bounds(dotted_path: str, fallback: tuple = (None, None)) -> tuple:
     if not isinstance(node, dict):
         return fallback
     return (node.get("minimum", fallback[0]), node.get("maximum", fallback[1]))
+
+
+# ── Factory-default reader ────────────────────────────────────────────────────
+
+_defaults_cache: dict | None = None
+
+
+def _load_defaults_cached() -> dict:
+    """Load + cache default_settings.json.  Returns {} if unreadable."""
+    global _defaults_cache
+    if _defaults_cache is None:
+        try:
+            _defaults_cache = load_defaults()
+        except (OSError, json.JSONDecodeError):
+            _defaults_cache = {}
+    return _defaults_cache
+
+
+def schema_default(section: str, key: str, fallback=None):
+    """Return the factory default for ``<section>.<key>`` from default_settings.json.
+
+    *section* and *key* may each be dotted (e.g. ``schema_default("dfhrtf",
+    "advanced.n_fft")``).  Returns *fallback* if the path is absent or the
+    defaults file cannot be read.
+
+    The returned value is a ``deepcopy`` — mutable defaults (e.g.
+    ``sofa.samplerates``) can be handed to callers without risk of the cached
+    factory copy being mutated.
+    """
+    value, found = _get_nested(_load_defaults_cached(), f"{section}.{key}")
+    if not found:
+        return fallback
+    return copy.deepcopy(value)
 
 
 # ── Validation schema ─────────────────────────────────────────────────────────

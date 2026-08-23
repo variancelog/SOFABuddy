@@ -40,9 +40,14 @@ class SmoothingParams:
             mean of cubed linear magnitudes), weighting peaks over nulls.
     """
 
+    # NOTE: these mirror the `dfhrtf.advanced.variable_smoothing_*` factory
+    # defaults in core/default_settings.json, the --var-smooth-* argparse
+    # defaults in core/scripts/generate_dfhrtf.py, and the fallbacks in
+    # core/dfhrtf_processor.py.  Keep all four in sync
+    # (tests/test_defaults_parity.py::test_variable_smoothing_four_way_sync).
     freq_low: float = 350.0
-    freq_hi: float = 3000.0
-    n_low: float = 1.0
+    freq_hi: float = 6000.0
+    n_low: float = 2.0
     n_hi: float = 12.0
     gamma: float = 0.88
     mean_mode: str = "db"

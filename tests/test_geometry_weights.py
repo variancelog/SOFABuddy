@@ -8,8 +8,6 @@ import os
 import numpy as np
 import pytest
 
-# Ensure project root is on sys.path so core.* resolves without installation.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from core.geometry_weights import (
     spherical_to_cartesian,
     get_dominant_radius,
