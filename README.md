@@ -150,14 +150,16 @@ All filename fields support substitution variables enclosed in `{` `}`:
 
 | Variable | Expands to | Available in |
 |---|---|---|
-| `{filename}` | Source SOFA filename (no extension) | SOFA naming, DFHRTF text, DFHRTF graphs |
-| `{folder}` | Source file's parent folder name | SOFA naming, DFHRTF text, DFHRTF graphs |
-| `{samplerate}` | Output samplerate (e.g. `48000`) | SOFA naming, DFHRTF text, DFHRTF graphs |
+| `{filename}` | Source SOFA filename (no extension) | SOFA naming, DFHRTF text, DFHRTF graphs, per-SOFA average |
+| `{folder}` | Source file's parent folder name | SOFA naming, DFHRTF text, DFHRTF graphs, per-SOFA average, global average |
+| `{samplerate}` | Output samplerate (e.g. `48000`) | SOFA naming, DFHRTF text, per-SOFA average (global average: `all`) |
 | `{eq}` | EQ variant: `uneq` or `dfeq` | SOFA naming only |
-| `{tilt}` | Spectral tilt value in dB/oct (e.g. `0.0`, `-0.5`) | DFHRTF text, DFHRTF graphs, global-average text |
-| `{LR}` | Channel: `L`, `R`, or `Avg` | DFHRTF text only |
-| `{graphtype}` | Plot type: `df`, `stereo`, or `weighted` | DFHRTF graphs only |
+| `{tilt}` | Spectral tilt value in dB/oct (e.g. `0.0`, `-0.5`) | DFHRTF text, DFHRTF graphs, per-SOFA average, global average |
+| `{LR}` | Channel: `L` or `R`; `Avg` for the per-SOFA average | DFHRTF text, per-SOFA average, global-average text |
+| `{graphtype}` | Plot type: `df`, `stereo`, or `weighted` | DFHRTF graphs, global-average graph |
 | `{algo}` | Short algorithm name: `arithmean`, `geoarc`, `softdtw` | Global-average text files only |
+
+The average outputs have their own templates, set only in `user_settings.json` for now (no field in the app yet): `dfhrtf.per_sofa_avg_filename` (default `{filename} avg LR`; `{algo}` is dropped), `dfhrtf.avg_filename` (default `{folder} avg {LR}`, one file per ear) and `dfhrtf.avg_graph_filename` (default `{folder} avg`).
 
 `{folder}` is especially useful in multi-folder batches: each output file is stamped with the name of its source folder, keeping files from different subjects or sessions distinct even when collected into a shared output directory.
 

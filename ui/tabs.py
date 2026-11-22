@@ -673,7 +673,6 @@ class DfhrtfTab(QWidget):
             "<p style='margin-top: 0px; margin-left: 10px;'>"
             "&bull; {filename} source SOFA filename;<br>"
             "&bull; {folder} source file's parent folder name;<br>"
-            "&bull; {samplerate} source SOFA samplerate;<br>"
             "&bull; {tilt} spectral tilt in dB/oct;<br>"
             "&bull; {graphtype} df / stereo / weighted.</p>"
         )

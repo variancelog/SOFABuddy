@@ -6,6 +6,7 @@
 
 ### Changed
 - The app version now lives only in `core/version.py`; the window title reads it.
+- Filename docs: `{samplerate}` is no longer listed for DFHRTF graph filenames, which never substituted it. The README's variable table now also lists where each variable works in the average-file names, and names the three average templates that are only set in `user_settings.json`.
 
 ## v0.6.0 (2026-11-21)
 
