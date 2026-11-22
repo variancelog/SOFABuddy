@@ -42,5 +42,5 @@
 
 ## Bugs
 - **DONE** - DHFRTF text and graph outputs align l/r magnitude at exactly 1kHz, which loses the real l/r magnitude relation.
-- Why is dfhrtf_processor.py not referenced by generate_sofa.py? The dfhrtf_processor is supposed to the "source of truth" for dfhrtf determination but they appear to be separate still.
-  - Partly addressed: `dfhrtf_processor.py` only orchestrates jobs; the shared source of truth for weighting is now `core/geometry_weights.py` (`calculate_geometric_weights`), used by both `generate_sofa.py` and `generate_dfhrtf.py`. The diffuse-field averaging itself is still computed separately in each script.
+- **DONE** - Why is dfhrtf_processor.py not referenced by generate_sofa.py? The dfhrtf_processor is supposed to the "source of truth" for dfhrtf determination but they appear to be separate still.
+  - Resolved (since 2026-06): `dfhrtf_processor.py` only orchestrates DFHRTF jobs and was never meant to hold DF maths. The shared source of truth is `core/geometry_weights.py` (`calculate_geometric_weights`): SOFA mastering and DFHRTF analysis use the same weighting mode (DFHRTF tab setting) and the same radius/duplicate cleanup, then the identical weighted power average. The dead `--advanced-dfeq` CLI option (always on) was removed 2026-11-22.

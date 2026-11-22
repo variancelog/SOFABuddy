@@ -230,7 +230,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         # Advanced dfhrtf params (with historically-correct defaults) — shared
         # across every job. Manifest mode has no argparse default fallback, so
         # this "common" dict must supply every value run_dfhrtf() reads off
-        # `args` unconditionally, including avg_algo and advanced_dfeq which
+        # `args` unconditionally, including avg_algo which
         # the CLI path only ever got via argparse defaults.
         dfhrtf_adv = df_cfg.get('advanced', {})
         smoothing_cfg = str(df_cfg.get('smoothing', 'Variable'))
@@ -251,7 +251,6 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             "lf_blend_low_oct": float(dfhrtf_adv.get('lf_blend_low_oct', 0.50)),
             "lf_blend_high_oct": float(dfhrtf_adv.get('lf_blend_high_oct', 1.0)),
             "stereo_angle": float(dfhrtf_adv.get('stereo_angle_deg', 30.0)),
-            "advanced_dfeq": True,
             "weighting_mode": str(df_cfg.get('weighting_mode', 'Auto')).lower(),
             "grid_scale_mode": str(dfhrtf_adv.get('weighted_grid_scale_mode', 'auto')).lower(),
             "grid_scale_low": float(dfhrtf_adv.get('weighted_grid_scale_low', 0.001)),

@@ -297,7 +297,6 @@ def build_parser():
     parser.add_argument("--var-smooth-mean-mode", choices=["db", "cubic"], default="db",
                         help="Window average: 'db' (favors nulls) or 'cubic' REW-style (favors peaks)")
     
-    parser.add_argument("--advanced-dfeq", action="store_true", default=True, help="Use advanced data sanitization")
     parser.add_argument("--weighting-mode", default="auto", choices=["auto", "geometric", "uniform"],
                         help="Grid weighting mode: auto (detect balanced grids), geometric, or uniform 1/N")
 
@@ -355,7 +354,6 @@ def run_dfhrtf(args):
     # 2. Compute Diffuse Field Response
     weights = calculate_geometric_weights(
         sofa.SourcePosition,
-        advanced_dfeq=args.advanced_dfeq,
         weighting_mode=args.weighting_mode,
     )
 
