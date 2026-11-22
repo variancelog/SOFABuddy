@@ -8,6 +8,10 @@
 - The app version now lives only in `core/version.py`; the window title reads it.
 - Filename docs: `{samplerate}` is no longer listed for DFHRTF graph filenames, which never substituted it. The README's variable table now also lists where each variable works in the average-file names, and names the three average templates that are only set in `user_settings.json`.
 
+### Removed
+- `tools/weighting_lab.py` and `tools/grid_comparator.py`, maintainer scripts used while developing grid weighting, no longer needed.
+- `data/lf_ref_mag_00.txt`, an unused backup of the previous LF reference curve.
+
 ## v0.6.0 (2026-11-21)
 
 ### Added
