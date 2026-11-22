@@ -175,7 +175,9 @@ Three algorithms are available for both **global averages** (Post Processing) an
 
 ## Grid Visualization
 
-**View Grid** (Files tab) opens a 3D scatter plot of the measurement grid for the selected SOFA file, with the window title set to the source filename.
+**View Grid** (Files tab) opens a 3D scatter plot of the measurement grid for the selected SOFA file, with the window title set to the source filename. The plot title shows the grid's elevation range (tagged "full sphere" when both poles are covered), dashed rings mark the open ends of partial grids, and the axes are fixed so grids can be compared at a glance.
+
+![Grid viewer](GridViewer_V3.png)
 
 **Weighted Grid** (DFHRTF tab) saves a plot of the solid-angle-weighted grid used in the DFHRTF calculation — node color encodes each node's relative solid-angle weight (uniform node size); the title shows the elevation range of the surviving nodes, with dashed boundary rings at the open ends of partial grids. Use **Per Folder** scope for one representative plot per source folder, or **All Files** for a plot per SOFA file.
 
