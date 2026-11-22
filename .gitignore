@@ -13,6 +13,7 @@ logs/
 zz*
 zz*/
 plans/
+reference/
 *.sofa
 .claude
 CLAUDE.md
