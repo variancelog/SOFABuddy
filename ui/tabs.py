@@ -5,7 +5,9 @@ from PySide6.QtCore import Signal, Qt
 
 from ui.widgets import FlameToggleButton, FlameDropdown, FlameNumericSlider, FlameLabel, FlameLineEdit
 from ui.theme import BG_WIDGET, BG_CONTROL, ACCENT, FG, CONTROL_HEIGHT
-from core.sofa_utils import get_sofa_metadata, calculate_max_itd, calculate_grid_radius, get_grid_cartesian
+from core.sofa_utils import (get_sofa_metadata, calculate_max_itd, calculate_grid_radius,
+                             get_grid_cartesian, format_elevation_span, format_elevation_range,
+                             draw_elevation_rings, apply_unit_sphere_axes)
 from core.config import load_defaults, schema_bounds, schema_default
 
 
@@ -92,6 +94,7 @@ class FilesTab(QWidget):
         self.lbl_samplerate = FlameLabel("Samplerate: -")
         self.lbl_length = FlameLabel("Length: -")
         self.lbl_points = FlameLabel("Points: -")
+        self.lbl_elevation = FlameLabel("Elevation range: -")
 
         # ITD Row
         itd_layout = QHBoxLayout()
@@ -142,6 +145,7 @@ class FilesTab(QWidget):
         info_layout.addWidget(self.lbl_samplerate)
         info_layout.addWidget(self.lbl_length)
         info_layout.addWidget(self.lbl_points)
+        info_layout.addWidget(self.lbl_elevation)
         info_layout.addLayout(itd_layout)
         info_layout.addLayout(radius_layout)
         info_layout.addLayout(grid_view_layout)
@@ -183,6 +187,7 @@ class FilesTab(QWidget):
         self.lbl_samplerate.setText(samplerate_text)
         self.lbl_length.setText("Length: -")
         self.lbl_points.setText("Points: -")
+        self.lbl_elevation.setText("Elevation range: -")
         self.lbl_itd_val.setText("-")
         self.btn_calc_itd.hide()
         self.lbl_itd_val.show()
@@ -211,6 +216,13 @@ class FilesTab(QWidget):
         self.lbl_samplerate.setText(f"Samplerate: {int(meta['samplerate'])} Hz")
         self.lbl_length.setText(f"Length: {meta['length']} samples")
         self.lbl_points.setText(f"Points: {meta['points']}")
+        cov = meta.get('coverage')
+        if cov is not None:
+            self.lbl_elevation.setText(
+                "Elevation range: "
+                + format_elevation_span(cov.el_min, cov.el_max, cov.full_sphere))
+        else:
+            self.lbl_elevation.setText("Elevation range: -")
 
         # Update ITD display from cache
         if file_path in self._itd_cache:
@@ -329,11 +341,17 @@ class FilesTab(QWidget):
             ax.clear()
             ax.scatter(cart[:, 0], cart[:, 1], cart[:, 2], c='black', s=4)
             suffix = f"  ({i + 1}/{len(grids)}  ←/→)" if len(grids) > 1 else ""
-            ax.set_title(f"{grid['radius']:g} m radius, {grid['n_nodes']} nodes{suffix}")
+            title = f"{grid['radius']:g} m radius, {grid['n_nodes']} nodes{suffix}"
+            cov = grid.get('coverage')
+            if cov is not None:
+                draw_elevation_rings(ax, cov)
+                title += "\n" + format_elevation_range(
+                    cov.el_min, cov.el_max, cov.full_sphere)
+            ax.set_title(title)
             ax.set_xlabel("x")
             ax.set_ylabel("y")
             ax.set_zlabel("z")
-            ax.set_box_aspect([1, 1, 1])
+            apply_unit_sphere_axes(ax)
             try:
                 fig.canvas.manager.set_window_title(stem)
             except Exception:

@@ -29,6 +29,10 @@ from core.geometry_weights import (  # noqa: E402
     calculate_geometric_weights,
 )
 from core.sofa_io import read_sofa_robust  # noqa: E402
+from core.grid_info import (  # noqa: E402
+    grid_coverage, format_elevation_range, draw_elevation_rings,
+    apply_unit_sphere_axes,
+)
 from core.smoothing import SmoothingParams, variable_smooth  # noqa: E402
 
 # Marker area (pts²) for the weighted-grid plot.  Size is constant so that
@@ -551,11 +555,16 @@ def run_dfhrtf(args):
             c=w, s=WEIGHTED_GRID_NODE_SIZE, cmap='viridis', alpha=0.85, vmin=vmin, vmax=vmax
         )
         plt.colorbar(sc, ax=ax, label='Solid-angle weight', shrink=0.6, pad=0.1)
-        ax.set_title(f"Weighted grid — {int(mask.sum())} nodes")
+        title = f"Weighted grid — {int(mask.sum())} nodes"
+        cov = grid_coverage(src[mask, 0], src[mask, 1])
+        if cov is not None:
+            draw_elevation_rings(ax, cov)
+            title += "\n" + format_elevation_range(cov.el_min, cov.el_max, cov.full_sphere)
+        ax.set_title(title)
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("z")
-        ax.set_box_aspect([1, 1, 1])
+        apply_unit_sphere_axes(ax)
         plt.savefig(args.graph_weighted_out, dpi=150, bbox_inches='tight')
         print(f"   [+] Saved Weighted Grid: {os.path.basename(args.graph_weighted_out)}")
         plt.close()

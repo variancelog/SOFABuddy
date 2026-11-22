@@ -1,6 +1,12 @@
 import netCDF4 as nc
 import numpy as np
 
+from core.grid_info import (  # noqa: F401  (re-exported)
+    GridCoverage, grid_coverage, elevation_range, format_elevation_range,
+    format_elevation_span, elevation_ring_xyz, boundary_ring_elevations,
+    draw_elevation_rings, apply_unit_sphere_axes,
+)
+
 def get_sofa_metadata(file_path: str) -> dict:
     """
     Extracts metadata from a SOFA file without loading the entire impulse response array.
@@ -25,10 +31,25 @@ def get_sofa_metadata(file_path: str) -> dict:
                 points = 0
                 length = 0
 
+            # 3. Elevation coverage (None if SourcePosition is absent/unreadable)
+            el_min = el_max = coverage = None
+            try:
+                src_var = ds.variables.get('SourcePosition')
+                if src_var is not None:
+                    src = src_var[:]
+                    coverage = grid_coverage(src[:, 0], src[:, 1])
+                    if coverage is not None:
+                        el_min, el_max = coverage.el_min, coverage.el_max
+            except Exception:
+                pass
+
             return {
                 "samplerate": samplerate,
                 "length": length,
-                "points": points
+                "points": points,
+                "el_min": el_min,
+                "el_max": el_max,
+                "coverage": coverage,
             }
     except Exception as e:
         print(f"Error reading SOFA metadata for {file_path}: {e}")
@@ -60,6 +81,8 @@ def get_grid_cartesian(file_path: str) -> dict | None:
         'cart'   : np.ndarray (M, 3) — xyz coordinates on the unit sphere
         'radius' : float — dominant measurement radius (metres)
         'n_nodes': int   — number of measurement points
+        'el_min', 'el_max' : float | None — raw elevation extent in degrees
+        'coverage': GridCoverage | None — pole coverage analysis
     Returns None on failure.
     """
     try:
@@ -83,7 +106,11 @@ def get_grid_cartesian(file_path: str) -> dict | None:
             z = np.sin(el_rad)
             cart = np.column_stack((x, y, z))
 
-            return {'cart': cart, 'radius': dominant_r, 'n_nodes': n_nodes}
+            coverage = grid_coverage(src[:, 0], src[:, 1])
+            el_min, el_max = ((coverage.el_min, coverage.el_max)
+                              if coverage is not None else (None, None))
+            return {'cart': cart, 'radius': dominant_r, 'n_nodes': n_nodes,
+                    'el_min': el_min, 'el_max': el_max, 'coverage': coverage}
     except Exception as e:
         print(f"Error loading grid for {file_path}: {e}")
         return None

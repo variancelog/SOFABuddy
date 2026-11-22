@@ -29,9 +29,17 @@ import pytest
 import sofar as sf
 
 from core.sofa_utils import (
+    boundary_ring_elevations,
+    draw_elevation_rings,
+    apply_unit_sphere_axes,
+    grid_coverage,
     calculate_grid_radius,
     calculate_max_itd,
     get_grid_cartesian,
+    elevation_range,
+    elevation_ring_xyz,
+    format_elevation_range,
+    format_elevation_span,
     get_sofa_metadata,
 )
 
@@ -60,11 +68,14 @@ def good_sofa(tmp_path, synthetic_sofa_file):
 def test_get_sofa_metadata_happy(good_sofa):
     """Metadata matches exactly what the fixture was built with."""
     meta = get_sofa_metadata(good_sofa)
-    assert meta == {
+    assert {k: meta[k] for k in ("samplerate", "length", "points")} == {
         "samplerate": float(FS),
         "length": N_SAMPLES,
         "points": N_POINTS,
     }
+    # Fibonacci sphere: elevation extent is just inside the poles.
+    assert -90.0 < meta["el_min"] < -80.0
+    assert 80.0 < meta["el_max"] < 90.0
 
 
 def test_calculate_grid_radius_happy(good_sofa):
@@ -87,7 +98,7 @@ def test_calculate_grid_radius_picks_dominant_not_mean(tmp_path, synthetic_sofa)
 def test_get_grid_cartesian_happy(good_sofa):
     """Grid is projected onto the *unit* sphere, with radius/count reported."""
     grid = get_grid_cartesian(good_sofa)
-    assert set(grid) == {"cart", "radius", "n_nodes"}
+    assert set(grid) == {"cart", "radius", "n_nodes", "el_min", "el_max", "coverage"}
     assert grid["n_nodes"] == N_POINTS
     assert grid["radius"] == pytest.approx(RADIUS_M)
     assert grid["cart"].shape == (N_POINTS, 3)
@@ -200,7 +211,8 @@ def test_get_sofa_metadata_sentinel(bad_input, request):
     path = request.getfixturevalue(bad_input)
     result = get_sofa_metadata(path)
     if bad_input == "barren_netcdf":
-        assert result == {"samplerate": 0.0, "length": 0, "points": 0}
+        assert result == {"samplerate": 0.0, "length": 0, "points": 0,
+                          "el_min": None, "el_max": None, "coverage": None}
     else:
         assert result is None
 
@@ -282,3 +294,218 @@ def test_missing_samplerate_degrades(tmp_path, good_sofa):
     assert meta["samplerate"] == 0.0
     assert meta["points"] == N_POINTS and meta["length"] == N_SAMPLES
     assert calculate_max_itd(path) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Elevation coverage helpers
+# ---------------------------------------------------------------------------
+M_ = chr(0x2212)   # proper minus sign
+D_ = chr(0xB0)     # degree sign
+
+
+@pytest.mark.parametrize(
+    "el, expected",
+    [
+        ([-90.0, 0.0, 90.0], (-90.0, 90.0)),          # full sphere
+        ([0.0, 45.0, 90.0], (0.0, 90.0)),             # upper hemisphere
+        ([10.0, 10.0, 10.0], (10.0, 10.0)),           # single ring
+        ([-0.0, 30.0], (0.0, 30.0)),                  # -0.0 normalised
+        ([-0.04, 30.04], (0.0, 30.0)),                # rounds to 0.1, -0.0 -> 0.0
+        ([-22.46, 5.0], (-22.5, 5.0)),
+        ([np.nan, -40.0, 90.0, np.nan], (-40.0, 90.0)),
+    ],
+)
+def test_elevation_range_values(el, expected):
+    lo, hi = elevation_range(np.array(el))
+    assert (lo, hi) == expected
+    assert str(lo) != "-0.0" and str(hi) != "-0.0"
+
+
+def test_elevation_range_masked_array_drops_masked():
+    arr = np.ma.masked_array([-90.0, 0.0, 45.0, 90.0], mask=[True, False, False, True])
+    assert elevation_range(arr) == (0.0, 45.0)
+
+
+@pytest.mark.parametrize("empty", [np.array([]), np.array([np.nan, np.nan]),
+                                   np.ma.masked_all(3)])
+def test_elevation_range_empty_is_none(empty):
+    assert elevation_range(empty) is None
+
+
+@pytest.mark.parametrize(
+    "lo, hi, expected",
+    [
+        (-90.0, 90.0, f"Elevation: {M_}90{D_} to +90{D_}"),
+        (-40.0, 90.0, f"Elevation: {M_}40{D_} to +90{D_}"),
+        (0.0, 90.0, f"Elevation: 0{D_} to +90{D_}"),
+        (-22.5, 90.0, f"Elevation: {M_}22.5{D_} to +90{D_}"),
+        (12.5, 12.5, f"Elevation: +12.5{D_} to +12.5{D_}"),
+    ],
+)
+def test_format_elevation_range(lo, hi, expected):
+    assert format_elevation_range(lo, hi) == expected
+
+
+def test_format_elevation_span_has_no_label():
+    assert format_elevation_span(-40.0, 90.0) == f"{M_}40{D_} to +90{D_}"
+
+
+@pytest.mark.parametrize("el", [-40.0, 0.0, 33.3])
+def test_elevation_ring_xyz_on_unit_sphere_at_elevation(el):
+    x, y, z = elevation_ring_xyz(el, n=90)
+    assert x.shape == (90,)
+    assert np.allclose(x**2 + y**2 + z**2, 1.0)
+    assert np.allclose(np.degrees(np.arcsin(z)), el)
+
+
+def _fib(n, el_lo=-90.0, el_hi=90.0):
+    """Near-uniform Fibonacci grid restricted to an elevation band (az, el deg)."""
+    k = np.arange(n) + 0.5
+    el = np.degrees(np.arcsin(1 - 2 * k / n))
+    az = np.degrees(k * np.pi * (3 - np.sqrt(5))) % 360
+    keep = (el >= el_lo) & (el <= el_hi)
+    return az[keep], el[keep]
+
+
+def _rows(el_values, n_az=72):
+    az = np.arange(n_az) * 360.0 / n_az
+    return (np.tile(az, len(el_values)), np.repeat(el_values, n_az))
+
+
+def test_coverage_exact_pole_rows_full_sphere():
+    az, el = _rows(np.arange(-90, 91, 10.0))
+    cov = grid_coverage(az, el)
+    assert cov.full_sphere and (cov.el_min, cov.el_max) == (-90.0, 90.0)
+
+
+def test_coverage_fibonacci_nodes_short_of_poles_is_full_sphere():
+    az, el = _fib(480)
+    assert el.max() < 89.0 and el.min() > -89.0       # no node on a pole
+    cov = grid_coverage(az, el)
+    assert cov.full_sphere and not cov.top_open and not cov.bottom_open
+
+
+def test_coverage_upper_hemisphere_bottom_open():
+    az, el = _fib(600, el_lo=0.0)
+    cov = grid_coverage(az, el)
+    assert cov.bottom_open and not cov.top_open and not cov.full_sphere
+
+
+def test_coverage_ari_like_both_open():
+    az, el = _rows(np.arange(-30, 81, 5.0))
+    cov = grid_coverage(az, el)
+    assert cov.top_open and cov.bottom_open
+    assert (cov.el_min, cov.el_max) == (-30.0, 80.0)
+
+
+def test_coverage_masked_and_nan_input():
+    az, el = _rows(np.arange(-90, 91, 10.0))
+    az_m = np.ma.masked_array(az, mask=(el > 60))
+    el_m = np.ma.masked_array(el, mask=(el > 60))
+    cov = grid_coverage(az_m, el_m)
+    assert cov.el_max == 60.0 and cov.top_open
+    el_n = el.copy()
+    el_n[:5] = np.nan
+    assert grid_coverage(az, el_n) is not None   # NaN rows dropped, no raise
+
+
+def test_coverage_single_point():
+    cov = grid_coverage([0.0], [90.0])
+    assert cov.spacing_deg is None and not cov.top_open and cov.bottom_open
+    cov = grid_coverage([0.0], [10.0])
+    assert cov.top_open and cov.bottom_open
+
+
+@pytest.mark.parametrize("empty", [[], [np.nan]])
+def test_coverage_empty_is_none(empty):
+    assert grid_coverage(empty, empty) is None
+
+
+def test_coverage_duplicates_do_not_zero_spacing():
+    az, el = _rows(np.arange(-30, 81, 5.0))
+    cov = grid_coverage(np.tile(az, 2), np.tile(el, 2))
+    assert cov.spacing_deg > 1.0
+
+
+def test_boundary_ring_elevations_follow_open_flags():
+    from core.grid_info import GridCoverage
+    assert boundary_ring_elevations(GridCoverage(-90, 90, 5, False, False)) == []
+    assert boundary_ring_elevations(GridCoverage(-83.4, 83.4, 8.7, False, False)) == []
+    assert boundary_ring_elevations(GridCoverage(0, 90, 5, False, True)) == [0]
+    assert boundary_ring_elevations(GridCoverage(-40, 80, 5, True, True)) == [-40, 80]
+    assert boundary_ring_elevations(GridCoverage(10, 10, None, True, True)) == [10]
+
+
+def test_format_full_sphere_suffix_only_when_full():
+    assert format_elevation_range(-83.4, 83.4, True) == (
+        f"Elevation: {M_}83.4{D_} to +83.4{D_} (full sphere)")
+    assert format_elevation_span(-83.4, 83.4, True).endswith("(full sphere)")
+    assert "full sphere" not in format_elevation_range(-30.0, 80.0)
+
+
+def test_get_grid_cartesian_reports_elevation_extent(tmp_path, synthetic_sofa):
+    s = synthetic_sofa(n_points=3)
+    s.SourcePosition = np.array(
+        [[0.0, -40.0, 1.0], [90.0, 10.0, 1.0], [0.0, 90.0, 1.0]], dtype=float
+    )
+    path = str(tmp_path / "partial.sofa")
+    sf.write_sofa(path, s)
+
+    grid = get_grid_cartesian(path)
+    assert (grid["el_min"], grid["el_max"]) == (-40.0, 90.0)
+    meta = get_sofa_metadata(path)
+    assert (meta["el_min"], meta["el_max"]) == (-40.0, 90.0)
+    assert grid["coverage"] == meta["coverage"]
+
+
+def test_weighted_grid_png_written(tmp_path, synthetic_sofa):
+    """Smoke test: backend script writes the weighted-grid PNG for a partial grid."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    s = synthetic_sofa(n_points=300)
+    src = np.array(s.SourcePosition, dtype=float)
+    keep = src[:, 1] >= -40
+    s.Data_IR = np.array(s.Data_IR)[keep]
+    s.SourcePosition = src[keep]
+    sofa_path = str(tmp_path / "partial.sofa")
+    sf.write_sofa(sofa_path, s)
+    png = tmp_path / "weighted.png"
+
+    script = Path(__file__).resolve().parents[1] / "core" / "scripts" / "generate_dfhrtf.py"
+    r = subprocess.run(
+        [sys.executable, str(script), "--input", sofa_path,
+         "--graph-weighted-out", str(png)],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert png.exists() and png.stat().st_size > 0
+
+
+def test_rings_drawn_for_open_ends_and_axes_fixed():
+    """Rings follow the open flags, and apply_unit_sphere_axes fixes the limits
+    to exactly +-1.05 regardless of the scatter's extent."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from core.grid_info import GridCoverage
+
+    rng = np.random.default_rng(0)
+    az = np.radians(rng.uniform(-60, 60, 200))
+    el = np.radians(rng.uniform(-40, 40, 200))
+    x, y, z = np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)
+
+    fig = plt.figure()
+    try:
+        ax = fig.add_subplot(111, projection="3d")
+        ax.scatter(x, y, z)
+        draw_elevation_rings(ax, GridCoverage(-40, 40, 5, True, True))
+        assert len(ax.lines) == 2
+        draw_elevation_rings(ax, GridCoverage(-40, 40, 5, False, False))
+        assert len(ax.lines) == 2
+        apply_unit_sphere_axes(ax)
+        for lim in (ax.get_xlim(), ax.get_ylim(), ax.get_zlim()):
+            assert lim == (-1.05, 1.05)
+    finally:
+        plt.close(fig)

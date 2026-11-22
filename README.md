@@ -55,8 +55,8 @@ pip install pytest-qt
 
 The Files tab manages your input files and output destination.
 
-- **File list**: User can drag and drop .sofa files anywhere on the app window, add `.sofa` files individually (**Add Files**) or scan a whole folder (**Add Folder**). Select a file to view its metadata — samplerate, impulse-response length, measurement point count, and optionally Max ITD and Grid Radius (computed on demand via their **Calculate** buttons).
-- **View Grid**: Opens a 3D scatter plot of the selected file's measurement grid. The window is titled with the source filename so multiple plots stay identifiable.
+- **File list**: User can drag and drop .sofa files anywhere on the app window, add `.sofa` files individually (**Add Files**) or scan a whole folder (**Add Folder**). Select a file to view its metadata — samplerate, impulse-response length, measurement point count, elevation range, and optionally Max ITD and Grid Radius (computed on demand via their **Calculate** buttons).
+- **View Grid**: Opens a 3D scatter plot of the selected file's measurement grid. The window is titled with the source filename so multiple plots stay identifiable. The plot title also shows the grid's elevation range, and dashed rings mark the lowest and highest elevation at open ends of partial grids (full-sphere grids are labelled as such), and the axes are fixed so grids can be compared at a glance.
 - **Remove Selected / Clear All**: Remove individual files with the button or by right-clicking the list; **Clear All** empties everything.
 - **Output Folder**:
   - **Default** — each source file's outputs land in `sofa_mastered/` and `DFHRTF/` subfolders next to that file. Files spanning multiple folders each get their own per-folder average.
@@ -177,7 +177,7 @@ Three algorithms are available for both **global averages** (Post Processing) an
 
 **View Grid** (Files tab) opens a 3D scatter plot of the measurement grid for the selected SOFA file, with the window title set to the source filename.
 
-**Weighted Grid** (DFHRTF tab) saves a plot of the solid-angle-weighted grid used in the DFHRTF calculation — node color encodes each node's relative solid-angle weight (uniform node size). Use **Per Folder** scope for one representative plot per source folder, or **All Files** for a plot per SOFA file.
+**Weighted Grid** (DFHRTF tab) saves a plot of the solid-angle-weighted grid used in the DFHRTF calculation — node color encodes each node's relative solid-angle weight (uniform node size); the title shows the elevation range of the surviving nodes, with dashed boundary rings at the open ends of partial grids. Use **Per Folder** scope for one representative plot per source folder, or **All Files** for a plot per SOFA file.
 
 ![Measurement grid (raw)](plot_grid_raw.png)
 ![Measurement grid (weighted)](plot_grid_weighted.png)

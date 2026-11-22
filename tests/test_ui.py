@@ -170,3 +170,26 @@ def test_main_window_drag_drop_invalid(qtbot):
     
     assert window.tab_files.file_list.count() == 0
     assert "Error: Skipped invalid file" in window.console.toPlainText()
+
+
+def test_files_tab_shows_elevation_range(qtbot, tmp_path, synthetic_sofa):
+    import numpy as np
+    import sofar as sf
+
+    els = np.arange(-40.0, 81.0, 20.0)
+    az = np.tile(np.arange(0.0, 360.0, 30.0), len(els))
+    s = synthetic_sofa(n_points=len(az))
+    s.SourcePosition = np.column_stack((az, np.repeat(els, 12), np.ones(len(az))))
+    path = str(tmp_path / "partial.sofa")
+    sf.write_sofa(path, s)
+
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    tab._show_single_file_info(path)
+    text = tab.lbl_elevation.text()
+    assert text.startswith("Elevation range:")
+    assert "40" in text and "+80" in text
+    assert "full sphere" not in text
+
+    tab._clear_single_file_info()
+    assert tab.lbl_elevation.text() == "Elevation range: -"
