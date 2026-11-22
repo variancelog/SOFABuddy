@@ -1,3 +1,12 @@
+## Unreleased
+
+### Added
+- `tools/preflight.py`: pre-push checks for the things that drifted in past releases — app version vs CHANGELOG, a CHANGELOG entry for code changes since the last tag, README image links and unlinked screenshots, forbidden or oversized files in outgoing commits, and the test suite. `--release vX.Y.Z` also checks the tag on GitHub and flags screenshots that may be stale after UI changes; `--fast` skips the tests.
+- Test guards in `tests/test_suite_health.py`: the app version matches the top CHANGELOG heading, README image links resolve, and every screenshot in the repo root is linked from the README.
+
+### Changed
+- The app version now lives only in `core/version.py`; the window title reads it.
+
 ## v0.6.0 (2026-11-21)
 
 ### Added

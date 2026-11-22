@@ -2,8 +2,8 @@
 Shared output-filename template rendering.
 
 Output filenames across SOFA mastering and DFHRTF analysis are built from
-user-editable templates containing `{var}` substitution tokens (see the
-"Filename Templates" table in CLAUDE.md). This module is the single place
+user-editable templates containing `{var}` substitution tokens (the
+variables are listed in README.md, "Filename Template Variables"). This module is the single place
 where that substitution happens, so SOFA naming, DFHRTF text, DFHRTF graphs,
 per-SOFA averages and global averages all agree on the semantics.
 

@@ -31,7 +31,7 @@ _JSON_ONLY = {
     "dfhrtf": {
         "advanced",
         # Average-output filename templates: JSON-only, no UI control yet.
-        # See CLAUDE.md "Filename Templates".
+        # See core/naming.py and README.md "Filename Template Variables".
         "avg_filename",
         "avg_graph_filename",
         "per_sofa_avg_filename",

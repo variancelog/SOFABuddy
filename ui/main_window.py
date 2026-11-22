@@ -7,6 +7,7 @@ from ui.widgets import FlameLabel, FlameToggleButton, FlameLineEdit
 from ui.workers import ProcessingWorker
 from ui import theme as T
 from core import config as C
+from core.version import __version__
 
 # Action-bar button styles — named states built from theme constants
 _STYLE_BTN_PROCESS = f"background-color: {T.ACCENT}; color: {T.FG}; padding: 12px; font-weight: bold;"
@@ -19,7 +20,7 @@ _STYLE_BTN_RESET   = (
 class SofaBuddyMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SOFA Buddy v0.6.0")
+        self.setWindowTitle(f"SOFA Buddy v{__version__}")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "sb_icon.png")))
         self.resize(800, 600)
         self.setStyleSheet(f"background-color: {T.BG_BASE};")

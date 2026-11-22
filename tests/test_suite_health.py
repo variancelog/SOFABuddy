@@ -10,6 +10,10 @@ Headless: no Qt import.
 """
 import os
 import re
+import shutil
+import subprocess
+
+import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS_DIR = os.path.join(ROOT, "tests")
@@ -101,3 +105,55 @@ def test_no_future_argparse_namespace_construction():
         f"Found new argparse.Namespace(...) construction in: {offending_files}. "
         "Use the shared test-fixture helper instead of hand-rolled arg mocking."
     )
+
+
+# --- release-hygiene guards ------------------------------------------------
+
+def _read_root(name):
+    with open(os.path.join(ROOT, name), "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _readme_relative_images():
+    links = re.findall(r"!\[[^\]]*\]\(\s*<?([^)\s>]+)", _read_root("README.md"))
+    return [l.split("#")[0].split("?")[0].replace("\\", "/").removeprefix("./")
+            for l in links if not re.match(r"^[a-z][a-z0-9+.-]*:|^//|^#", l, re.I)]
+
+
+def _version_tuple(s):
+    return tuple(int(x) for x in s.split("."))
+
+
+def test_version_matches_changelog():
+    """
+    core.version.__version__ must equal the first '## vX.Y.Z' heading of
+    CHANGELOG.md. If the changelog opens with '## Unreleased', a bump in
+    progress is allowed: __version__ must be >= the first versioned heading.
+    """
+    from core.version import __version__
+
+    headings = re.findall(r"^##\s+(Unreleased|v\d+\.\d+\.\d+)", _read_root("CHANGELOG.md"), re.M | re.I)
+    assert headings, "CHANGELOG.md has no '## vX.Y.Z' or '## Unreleased' heading"
+    versions = [h.lstrip("v") for h in headings if h.lower() != "unreleased"]
+    assert versions, "CHANGELOG.md has no versioned heading"
+    if headings[0].lower() == "unreleased":
+        assert _version_tuple(__version__) >= _version_tuple(versions[0])
+    else:
+        assert __version__ == versions[0]
+
+
+def test_readme_relative_images_exist():
+    missing = [p for p in _readme_relative_images() if not os.path.isfile(os.path.join(ROOT, p))]
+    assert not missing, f"README.md links missing image(s): {missing}"
+
+
+def test_tracked_root_pngs_are_linked_from_readme():
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    proc = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True)
+    if proc.returncode != 0:
+        pytest.skip("not a git repository")
+    pngs = [f for f in proc.stdout.splitlines() if "/" not in f and f.lower().endswith(".png")]
+    linked = set(_readme_relative_images())
+    orphans = [p for p in pngs if p not in linked]
+    assert not orphans, f"tracked root PNG(s) not linked from README.md: {orphans}"
