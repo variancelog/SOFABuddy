@@ -1,3 +1,20 @@
+## v0.6.0 (2026-11-21)
+
+### Added
+- **Elevation coverage display** for measurement grids, backed by a new dependency-free (numpy-only) module, `core/grid_info.py` (`GridCoverage`, `grid_coverage()`, `elevation_range()`, `format_elevation_range()`, `elevation_ring_xyz()`, `draw_elevation_rings()`, `apply_unit_sphere_axes()`). `core/sofa_utils.py` re-exports these; the backend scripts import them straight from `core/grid_info.py` so they don't load netCDF4.
+  - **Files tab**: new "Elevation range" metadata row, computed instantly from the raw `SourcePosition`, with a "(full sphere)" tag when both poles are covered.
+  - **View Grid** and **Weighted Grid** plots: the title gets a second line giving the elevation range. Dashed boundary rings are drawn only at open ends of partial grids. Axes are fixed at ±1.05 so different grids can be compared side by side. The Weighted Grid PNG computes its range from the cleaned (surviving) nodes only.
+  - A pole counts as covered when its empty polar cap is no wider than the grid's median nearest-neighbour angular spacing. This means quadrature grids with no node on the pole, such as a t-design whose nodes only reach ±83.4°, still read as full sphere.
+  - New tests for the helpers, the Files tab metadata, the axis limits and the weighted-grid PNG.
+
+### Removed
+- The dead `--advanced-dfeq` CLI option in `generate_dfhrtf.py`. It was always on, and `dfhrtf_processor.py` always passed `True` for it. Behaviour is unchanged.
+
+### Changed
+- README: the File list, View Grid and Weighted Grid sections now describe the elevation coverage display.
+- `reference/` (a local maintainer folder) is now gitignored.
+- IDEA.md: marked the finished items as done (parallel processing, Mesh2SOFA cleanup, file multiselect, the Output Folder move, elevation coverage, the "Post Processing" row move, and the DF source-of-truth question). Also noted that grid resampling is shelved on the local `wip/grid-resampling` branch, since it showed no DFHRTF benefit over geometric weighting.
+
 ## v0.5.0 (2026-08-22)
 
 ### Added

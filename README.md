@@ -6,7 +6,7 @@ A desktop GUI for mastering SOFA HRTF files and extracting diffuse-field HRTF (D
 
 ## Screenshots
 
-![Files Tab](SofaBuddy_Tab1_Files_v2.png)
+![Files Tab](SofaBuddy_Tab1_Files_v3.png)
 ![SOFA Tab](SofaBuddy_Tab2_SOFA_v2.png)
 ![DFHRTF Tab](SofaBuddy_Tab3_DFHRTF_v2.png)
 
