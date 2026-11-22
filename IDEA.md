@@ -2,8 +2,8 @@
 
 ### General
 - **DONE** - Add parallel processing for large file sets
- - Chunked subprocesses on a bounded thread pool (`processing.max_workers` / `processing.chunk_size`), per-file progress.
- - Covers both SOFA mastering and DFHRTF stages (also 2/3 step HRTF inclusive workflows, once added).
+  - Chunked subprocesses on a bounded thread pool (`processing.max_workers` / `processing.chunk_size`), per-file progress.
+  - Covers both SOFA mastering and DFHRTF stages (also 2/3 step HRTF inclusive workflows, once added).
 - **DONE** - Review and remove vestigial references to Mesh2SOFA-related code not used in the current project. (No Mesh2SOFA references left in the code as of 2026-11-22.)
 - Move on/off toggle to tab selector and remove from top of tab. I keep wanting to click on the circle to enable even though I designed it, so I can only imagine what others would do.
 
@@ -36,7 +36,7 @@
 - **DONE** (2026-11-22) - Show elevation coverage: "Elevation range" metadata row, plus elevation title line, "(full sphere)" tag, boundary rings at open ends and fixed ±1.05 axes on View Grid and Weighted Grid plots.
 
 ## DFHRTF tab
-- Move "Post Processsing" row to below Text outputs filename row
+- **DONE** Move "Post Processsing" row to below Text outputs filename row
   - Plus add post-proc filenaming row. (Average filenames exist but are JSON-only for now: `dfhrtf.avg_filename`, `dfhrtf.per_sofa_avg_filename`.)
 - Should DFHRTF be just DFHRTF Text, while Graphs can go on a separate page.
 
