@@ -335,17 +335,20 @@
               "enum": [
                 "auto",
                 "manual"
-              ]
+              ],
+              "description": "Colour range of the weighted-grid plot. 'manual' uses the fixed weighted_grid_rel_low/high range; 'auto' uses the 1st-99th percentile of the relative weights."
             },
-            "weighted_grid_scale_low": {
+            "weighted_grid_rel_low": {
               "type": "number",
               "minimum": 0.0,
-              "maximum": 1.0
+              "maximum": 10.0,
+              "description": "Lower end of the manual weighted-grid colour range, in relative solid-angle weight (weight x node count; 1 = mean)."
             },
-            "weighted_grid_scale_high": {
+            "weighted_grid_rel_high": {
               "type": "number",
               "minimum": 0.0,
-              "maximum": 1.0
+              "maximum": 10.0,
+              "description": "Upper end of the manual weighted-grid colour range, in relative solid-angle weight (weight x node count; 1 = mean)."
             },
             "preserve_lr_balance": {
               "type": "boolean"

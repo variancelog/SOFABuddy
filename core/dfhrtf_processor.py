@@ -238,7 +238,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         smoothing_arg = 'variable' if smoothing_cfg.lower() == 'variable' else smoothing_cfg.split('/')[-1]
 
         common = {
-            "avg_algo": df_cfg.get('per_sofa_avg_algo', 'Arithmetic Mean'),
+            "avg_algo": df_cfg.get('per_sofa_avg_algo', 'Geo-Arc-Length'),
             "delimiter": delim,
             "smoothing": smoothing_arg,
             "tilt": float(df_cfg.get('tilt', 0.0)),
@@ -252,9 +252,9 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             "lf_blend_high_oct": float(dfhrtf_adv.get('lf_blend_high_oct', 1.0)),
             "stereo_angle": float(dfhrtf_adv.get('stereo_angle_deg', 30.0)),
             "weighting_mode": str(df_cfg.get('weighting_mode', 'Auto')).lower(),
-            "grid_scale_mode": str(dfhrtf_adv.get('weighted_grid_scale_mode', 'auto')).lower(),
-            "grid_scale_low": float(dfhrtf_adv.get('weighted_grid_scale_low', 0.001)),
-            "grid_scale_high": float(dfhrtf_adv.get('weighted_grid_scale_high', 0.003)),
+            "grid_scale_mode": str(dfhrtf_adv.get('weighted_grid_scale_mode', 'manual')).lower(),
+            "grid_scale_low": float(dfhrtf_adv.get('weighted_grid_rel_low', 0.0)),
+            "grid_scale_high": float(dfhrtf_adv.get('weighted_grid_rel_high', 2.0)),
             "preserve_lr_balance": bool(dfhrtf_adv.get('preserve_lr_balance', True)),
             "var_smooth_freq_low": float(dfhrtf_adv.get('variable_smoothing_freq_low', 350.0)),
             "var_smooth_freq_hi": float(dfhrtf_adv.get('variable_smoothing_freq_hi', 6000.0)),
@@ -359,6 +359,23 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         proc_cfg = config.get('processing', {})
         raw_workers = int(proc_cfg.get('max_workers', 0) or 0)
         max_workers = raw_workers if raw_workers > 0 else max(1, (os.cpu_count() or 2) // 2)
+
+        # Jobs that ended up with no output at all (e.g. weighted grid scope
+        # "Per Folder" with no text/graph outputs: only the first file per
+        # folder emits a grid) would just load a SOFA to produce nothing, so
+        # they never reach a subprocess. They still count as done for progress.
+        output_keys = ('text_out_l', 'text_out_r', 'text_out_avg',
+                       'graph_out', 'graph_stereo_out', 'graph_weighted_out')
+        # A job whose input is missing is kept so the run still reports it.
+        jobs_to_run = [j for j in jobs
+                       if any(j.get(k) for k in output_keys)
+                       or not os.path.exists(j['input'])]
+        n_skipped = len(jobs) - len(jobs_to_run)
+        if n_skipped:
+            log_callback(f"DFHRTF: {n_skipped} file(s) needed no output; skipped.")
+            jobs = jobs_to_run
+            if not jobs:
+                progress_callback(100, "DFHRTF: no output needed")
 
         # 4. Execute Jobs (chunked + parallel)
         if jobs:

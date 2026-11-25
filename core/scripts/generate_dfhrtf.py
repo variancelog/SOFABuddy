@@ -9,16 +9,6 @@ import warnings
 warnings.filterwarnings("ignore", message=r".*doesn't match a supported version.*")
 import numpy as np  # noqa: E402
 import sofar as sf  # noqa: E402
-import scipy.fft as fft  # noqa: E402
-import matplotlib  # noqa: E402
-# Force the non-interactive Agg backend before importing pyplot. With PySide6
-# installed, matplotlib would otherwise auto-select QtAgg and spin up Qt
-# machinery in every manifest-mode child process — tolerable for one figure
-# set per process, wasteful at 3 x chunk_size figures per process.
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import csv  # noqa: E402
-import re  # noqa: E402
 
 # Bootstrap project root onto sys.path so core.* imports work when this script
 # is launched as a subprocess (no cwd / PYTHONPATH guarantees from the caller).
@@ -29,18 +19,137 @@ from core.geometry_weights import (  # noqa: E402
     calculate_geometric_weights,
 )
 from core.sofa_io import read_sofa_robust  # noqa: E402
-from core.grid_info import (  # noqa: E402
-    grid_coverage, format_elevation_range, draw_elevation_rings,
-    apply_unit_sphere_axes,
-)
+from core.grid_info import grid_coverage  # noqa: E402
+from core.grid_plot import FIGSIZE, plot_weighted_grid  # noqa: E402
 from core.smoothing import SmoothingParams, variable_smooth  # noqa: E402
-
-# Marker area (pts²) for the weighted-grid plot.  Size is constant so that
-# comparisons across files differ only in color, not marker footprint.
-WEIGHTED_GRID_NODE_SIZE = 20
 
 
 # ================= HELPER FUNCTIONS =================
+
+
+def _get_pyplot():
+    """Import pyplot on first use (it is slow to import and many jobs draw no graph).
+
+    The non-interactive Agg backend is forced before pyplot is imported. With
+    PySide6 installed, matplotlib would otherwise auto-select QtAgg and spin up
+    Qt machinery in every manifest-mode child process.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    return plt
+
+
+# Upper bound on the complex FFT block materialised while accumulating the
+# diffuse-field power (bytes); keeps big grids (10k+ measurements) in bounded memory.
+_FFT_BLOCK_BYTES = 64 * 1024 * 1024
+
+
+def diffuse_field_db_direct(hrirs, weights, n_fft):
+    """Weighted power-average of all measurements, in dB. Shape (receivers, n_fft//2+1).
+
+    Reference implementation: sums |rfft(hrirs, n_fft)|^2 * weight over axis 0,
+    processed in bounded blocks and skipping zero-weight rows. Rows are
+    accumulated in order, which reproduces the single-pass reduction bit for bit.
+    """
+    n_rec = hrirs.shape[1]
+    n_bins = n_fft // 2 + 1
+    acc = np.zeros((n_rec, n_bins))
+    active = np.flatnonzero(weights != 0)
+    block = max(1, _FFT_BLOCK_BYTES // (n_rec * n_bins * 16))
+    for start in range(0, active.size, block):
+        rows = active[start:start + block]
+        power = np.abs(np.fft.rfft(hrirs[rows], n=n_fft, axis=2)) ** 2
+        power *= weights[rows][:, np.newaxis, np.newaxis]
+        # Fold the running total into the first row, then reduce over axis 0:
+        # numpy adds rows sequentially there, so this is acc + p0 + p1 + ... in
+        # the same order as the single-pass sum.
+        power[0] += acc
+        acc = power.sum(axis=0)
+    return 20 * np.log10(np.sqrt(acc) + 1e-12)
+
+
+def _next_fast_len(n):
+    from scipy.fft import next_fast_len
+    return next_fast_len(n, real=True)
+
+
+def fast_path_length(n_samples, n_fft):
+    """FFT length L for the autocorrelation method, or None if it is not a clear win.
+
+    Needs the full autocorrelation (2N-1 lags) to fit in n_fft without aliasing,
+    and a transform at most half of n_fft so the saving is real.
+    """
+    n = min(n_samples, n_fft)
+    if n < 2 or 2 * n - 1 > n_fft:
+        return None
+    length = _next_fast_len(2 * n - 1)
+    return length if length <= n_fft // 2 else None
+
+
+def diffuse_field_db_fast(hrirs, weights, n_fft, length=None):
+    """Same quantity as diffuse_field_db_direct, via the autocorrelation identity.
+
+    sum_m w_m |FFT_n(x_m)|^2 = FFT_n(sum_m w_m autocorr(x_m)). The weighted power
+    is accumulated on a short grid of L >= 2N-1 points (L/2+1 bins instead of
+    n_fft/2+1), turned into the average autocorrelation with one irfft, then
+    zero-padded to n_fft and transformed once. Mathematically identical, but not
+    bit-identical (relative error about 1e-13 of the peak power).
+    """
+    n_rec, n = hrirs.shape[1], min(hrirs.shape[2], n_fft)
+    if length is None:
+        length = fast_path_length(hrirs.shape[2], n_fft)
+        if length is None:
+            raise ValueError("fast diffuse-field path not valid for this size")
+    half = length // 2 + 1
+    acc = np.zeros((n_rec, half))
+    active = np.flatnonzero(weights != 0)
+    block = max(1, _FFT_BLOCK_BYTES // (n_rec * half * 16))
+    for start in range(0, active.size, block):
+        rows = active[start:start + block]
+        power = np.abs(np.fft.rfft(hrirs[rows][:, :, :n], n=length, axis=2)) ** 2
+        power *= weights[rows][:, np.newaxis, np.newaxis]
+        power[0] += acc
+        acc = power.sum(axis=0)
+    r = np.fft.irfft(acc, n=length, axis=1)            # lags 0..N-1, then wrapped negatives
+    r_pad = np.zeros((n_rec, n_fft))
+    r_pad[:, :n] = r[:, :n]
+    r_pad[:, n_fft - (n - 1):] = r[:, length - (n - 1):]
+    power = np.maximum(np.fft.rfft(r_pad, axis=1).real, 0.0)
+    return 20 * np.log10(np.sqrt(power) + 1e-12)
+
+
+def diffuse_field_db(hrirs, weights, n_fft, method="auto"):
+    """Weighted power-average of all measurements, in dB. Shape (receivers, n_fft//2+1).
+
+    method: "auto" uses the fast autocorrelation path when it is a clear win
+    (short IRs relative to n_fft) and the exact direct path otherwise;
+    "direct" / "fast" force one of them.
+    """
+    if method != "direct":
+        length = fast_path_length(hrirs.shape[2], n_fft)
+        if length is not None:
+            return diffuse_field_db_fast(hrirs, weights, n_fft, length)
+        if method == "fast":
+            raise ValueError("fast diffuse-field path not valid for this size")
+    return diffuse_field_db_direct(hrirs, weights, n_fft)
+
+
+def bracketing_bins(src_freqs, target_freqs):
+    """Indices of the source bins np.interp reads for each target frequency."""
+    j = np.searchsorted(src_freqs, target_freqs, side="right")
+    both = np.concatenate([j - 1, j])
+    return np.unique(np.clip(both, 0, len(src_freqs) - 1))
+
+
+def smooth_interp(smooth_fn, src_freqs, mags, target_freqs, bins):
+    """smooth_fn then np.interp onto target_freqs, smoothing only the needed bins.
+
+    Identical to np.interp(target_freqs, src_freqs, smooth_fn(src_freqs, mags))
+    because each smoothed point is independent and np.interp only reads the two
+    source points bracketing each target.
+    """
+    return np.interp(target_freqs, src_freqs[bins], smooth_fn(src_freqs, mags, bins))
 
 
 def find_closest_grid_point(source_pos, target_az, target_el):
@@ -73,8 +182,22 @@ def apply_spectral_tilt(freqs, magnitude_db, slope_per_octave, ref_freq=1000.0):
     tilt_curve = num_octaves * slope_per_octave
     return magnitude_db + tilt_curve
 
-def apply_smoothing(freqs, mags, fraction=24):
-    """Applies 1/fraction octave moving-average smoothing."""
+def apply_smoothing(freqs, mags, fraction=24, indices=None):
+    """Applies 1/fraction octave moving-average smoothing.
+
+    With `indices` (ascending `freqs` required), only those output points are
+    computed and the result has shape (len(indices),); values equal the full
+    result at those positions.
+    """
+    if indices is not None:
+        idx = np.asarray(indices, dtype=np.intp)
+        half = 2**(1/(2*fraction))
+        lo = np.searchsorted(freqs, freqs[idx] / half, side="left")
+        hi = np.searchsorted(freqs, freqs[idx] * half, side="right")
+        out = np.empty(idx.size, dtype=float)
+        for k in range(idx.size):
+            out[k] = np.mean(mags[lo[k]:hi[k]]) if hi[k] > lo[k] else mags[idx[k]]
+        return out
     smoothed = np.zeros_like(mags)
     for i, f in enumerate(freqs):
         f_lower = f / (2**(1/(2*fraction)))
@@ -102,18 +225,27 @@ def make_smoother(args):
             mean_mode=args.var_smooth_mean_mode,
         )
 
-        def smooth_fn(freqs, mags):
+        def smooth_fn(freqs, mags, indices=None):
             # variable_smooth needs positive frequencies (log2 axis); the DC
             # bin of an rfftfreq grid passes through unchanged.
             out = np.array(mags, dtype=float, copy=True)
             pos = freqs > 0
-            out[pos] = variable_smooth(freqs[pos], out[pos], params)
-            return out
+            if indices is None:
+                out[pos] = variable_smooth(freqs[pos], out[pos], params)
+                return out
+            idx = np.asarray(indices, dtype=np.intp)
+            res = out[idx]
+            sel = pos[idx]
+            pos_rank = np.cumsum(pos) - 1       # position of each bin within freqs[pos]
+            res[sel] = variable_smooth(freqs[pos], out[pos], params,
+                                       indices=pos_rank[idx[sel]])
+            return res
 
         return smooth_fn, "Variable Smoothing"
 
     fraction = int(args.smoothing)
-    return (lambda freqs, mags: apply_smoothing(freqs, mags, fraction=fraction),
+    return (lambda freqs, mags, indices=None: apply_smoothing(freqs, mags, fraction=fraction,
+                                                              indices=indices),
             f"1/{fraction} Octave Smoothing")
 
 def save_text_data(filename, freqs, mag, delimiter="\t"):
@@ -300,12 +432,12 @@ def build_parser():
     parser.add_argument("--weighting-mode", default="auto", choices=["auto", "geometric", "uniform"],
                         help="Grid weighting mode: auto (detect balanced grids), geometric, or uniform 1/N")
 
-    parser.add_argument("--grid-scale-mode", default="auto", choices=["auto", "manual"],
-                        help="Weighted-grid color range: auto (1st-99th pct) or manual fixed low/high")
-    parser.add_argument("--grid-scale-low",  type=float, default=0.001,
-                        help="Manual color-range minimum (default 0.001)")
-    parser.add_argument("--grid-scale-high", type=float, default=0.003,
-                        help="Manual color-range maximum (default 0.003)")
+    parser.add_argument("--grid-scale-mode", default="manual", choices=["auto", "manual"],
+                        help="Weighted-grid color range: manual fixed low/high or auto (1st-99th pct)")
+    parser.add_argument("--grid-scale-low",  type=float, default=0.0,
+                        help="Manual color-range minimum, relative weight (1 = mean; default 0.0)")
+    parser.add_argument("--grid-scale-high", type=float, default=2.0,
+                        help="Manual color-range maximum, relative weight (1 = mean; default 2.0)")
     parser.add_argument("--preserve-lr-balance", action="store_true",
                         help="Normalize L and R with a single shared 1 kHz reference "
                              "(mean of L/R) to preserve the real inter-aural level offset")
@@ -351,96 +483,101 @@ def run_dfhrtf(args):
     lf_blend_high_oct= args.lf_blend_high_oct
     stereo_angle     = args.stereo_angle
 
+    # Decide up front which outputs this job needs, so work nobody asked for
+    # (FFT of every measurement, smoothing, the L/R average, ...) is skipped.
+    need_df = bool(args.text_out_l or args.text_out_r or args.text_out_avg
+                   or args.graph_out)
+    need_spectrum = need_df or bool(args.graph_stereo_out)
+
     # 2. Compute Diffuse Field Response
-    weights = calculate_geometric_weights(
-        sofa.SourcePosition,
-        weighting_mode=args.weighting_mode,
-    )
+    weights = None
+    if need_df or args.graph_weighted_out:
+        weights = calculate_geometric_weights(
+            sofa.SourcePosition,
+            weighting_mode=args.weighting_mode,
+        )
 
-    # FFT (Measurements, Receivers, Freqs)
-    fft_data = np.fft.rfft(hrirs, n=n_fft, axis=2)
-    power_spec = np.abs(fft_data)**2
+    if need_spectrum:
+        fft_freqs = np.fft.rfftfreq(n_fft, d=1/fs)
 
-    # Weighted Average across measurements (Axis 0)
-    weights_expanded = weights[:, np.newaxis, np.newaxis]
-    avg_power = np.sum(power_spec * weights_expanded, axis=0)
+        # 3. Interpolate & Smooth
+        target_freqs = generate_fractional_octave_frequencies(20, 20000,
+                                                              fraction=args.output_octave_fraction)
+        # Only the FFT bins np.interp will read need smoothing.
+        bins = bracketing_bins(fft_freqs, target_freqs)
+        idx_norm = (np.abs(target_freqs - norm_freq_hz)).argmin()
 
-    avg_mag = np.sqrt(avg_power)
-    avg_db = 20 * np.log10(avg_mag + 1e-12)
-    fft_freqs = np.fft.rfftfreq(n_fft, d=1/fs)
+        smooth_fn, smoothing_label = make_smoother(args)
+        print(f"   -> Applying {smoothing_label}...")
 
-    # 3. Interpolate & Smooth
-    target_freqs = generate_fractional_octave_frequencies(20, 20000,
-                                                          fraction=args.output_octave_fraction)
+    if need_df:
+        # FFT (Measurements, Receivers, Freqs) -> weighted power average, in dB
+        avg_db = diffuse_field_db(hrirs, weights, n_fft)
 
-    smooth_fn, smoothing_label = make_smoother(args)
-    print(f"   -> Applying {smoothing_label}...")
-    smoothed_l = smooth_fn(fft_freqs, avg_db[0])
-    smoothed_r = smooth_fn(fft_freqs, avg_db[1])
+        val_l = smooth_interp(smooth_fn, fft_freqs, avg_db[0], target_freqs, bins)
+        val_r = smooth_interp(smooth_fn, fft_freqs, avg_db[1], target_freqs, bins)
 
-    val_l = np.interp(target_freqs, fft_freqs, smoothed_l)
-    val_r = np.interp(target_freqs, fft_freqs, smoothed_r)
-
-    # 4. Normalize (0 dB at norm_freq_hz)
-    # preserve_lr_balance: use a single shared mean reference so the real
-    # inter-aural level difference (ILD) is preserved across L and R.
-    idx_norm = (np.abs(target_freqs - norm_freq_hz)).argmin()
-    if args.preserve_lr_balance:
-        ref = (val_l[idx_norm] + val_r[idx_norm]) / 2.0   # shared → preserves ILD
-        val_l -= ref
-        val_r -= ref
-    else:
-        val_l -= val_l[idx_norm]
-        val_r -= val_r[idx_norm]
-
-    # 4.5 LF Extension
-    if args.lf_ext_dfhrtf:
-        print(f"   -> Applying LF Extension (xover: {args.lf_ext_dfhrtf_xover}Hz)...")
-        ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "lf_ref_mag.txt")
-        ref_freqs, ref_db = load_lf_reference(ref_path)
-        if ref_freqs is not None:
-            val_l = apply_lf_extension(target_freqs, val_l, ref_freqs, ref_db,
-                                       args.lf_ext_dfhrtf_xover,
-                                       blend_low_oct=lf_blend_low_oct,
-                                       blend_high_oct=lf_blend_high_oct)
-            val_r = apply_lf_extension(target_freqs, val_r, ref_freqs, ref_db,
-                                       args.lf_ext_dfhrtf_xover,
-                                       blend_low_oct=lf_blend_low_oct,
-                                       blend_high_oct=lf_blend_high_oct)
-
-    # 5. Apply Tilt
-    if args.tilt != 0:
-        print(f"   -> Applying {args.tilt} dB/oct tilt...")
-        val_l = apply_spectral_tilt(target_freqs, val_l, args.tilt, norm_freq_hz)
-        val_r = apply_spectral_tilt(target_freqs, val_r, args.tilt, norm_freq_hz)
-
-    # 6. Calculate Average
-    if args.avg_algo == "Arithmetic Mean":
-        val_avg = (val_l + val_r) / 2.0
-    else:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
-        from core.averaging import CurveAverager, CommonAxisInterpolator
-        mags_2d = np.vstack([val_l, val_r])
-        mag_min, mag_max = float(mags_2d.min()), float(mags_2d.max())
-        if mag_max > mag_min:
-            norm = (mags_2d - mag_min) / (mag_max - mag_min)
+        # 4. Normalize (0 dB at norm_freq_hz)
+        # preserve_lr_balance: use a single shared mean reference so the real
+        # inter-aural level difference (ILD) is preserved across L and R.
+        if args.preserve_lr_balance:
+            ref = (val_l[idx_norm] + val_r[idx_norm]) / 2.0   # shared → preserves ILD
+            val_l -= ref
+            val_r -= ref
         else:
-            norm = np.zeros_like(mags_2d)
-        if args.avg_algo == "Geo-Arc-Length":
-            log_f = np.log10(target_freqs)
-            norm_freqs = (log_f - log_f.min()) / (log_f.max() - log_f.min())
-            avg_norm = CurveAverager.geometric_arc_length_blend(norm_freqs, norm * 0.01) / 0.01
-        elif args.avg_algo == "Soft-DTW":
-            print("   -> Running Soft-DTW L/R average...")
-            # n_workers=1: this runs inside a chunk subprocess; the parallel
-            # chunk pool already provides the concurrency (no BLAS/thread fan-out).
-            avg_norm = CurveAverager.soft_dtw_barycenter(norm, gamma=args.lr_avg_gamma, n_workers=1)
+            val_l -= val_l[idx_norm]
+            val_r -= val_r[idx_norm]
+
+        # 4.5 LF Extension
+        if args.lf_ext_dfhrtf:
+            print(f"   -> Applying LF Extension (xover: {args.lf_ext_dfhrtf_xover}Hz)...")
+            ref_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "lf_ref_mag.txt")
+            ref_freqs, ref_db = load_lf_reference(ref_path)
+            if ref_freqs is not None:
+                val_l = apply_lf_extension(target_freqs, val_l, ref_freqs, ref_db,
+                                           args.lf_ext_dfhrtf_xover,
+                                           blend_low_oct=lf_blend_low_oct,
+                                           blend_high_oct=lf_blend_high_oct)
+                val_r = apply_lf_extension(target_freqs, val_r, ref_freqs, ref_db,
+                                           args.lf_ext_dfhrtf_xover,
+                                           blend_low_oct=lf_blend_low_oct,
+                                           blend_high_oct=lf_blend_high_oct)
+
+        # 5. Apply Tilt
+        if args.tilt != 0:
+            print(f"   -> Applying {args.tilt} dB/oct tilt...")
+            val_l = apply_spectral_tilt(target_freqs, val_l, args.tilt, norm_freq_hz)
+            val_r = apply_spectral_tilt(target_freqs, val_r, args.tilt, norm_freq_hz)
+
+    # 6. Calculate Average (only when the average text file is requested)
+    val_avg = None
+    if args.text_out_avg:
+        if args.avg_algo == "Arithmetic Mean":
+            val_avg = (val_l + val_r) / 2.0
         else:
-            avg_norm = CurveAverager.arithmetic_mean(norm)
-        val_avg = CommonAxisInterpolator.unnormalize_magnitude(avg_norm, mag_min, mag_max)
+            from core.averaging import CurveAverager, CommonAxisInterpolator
+            mags_2d = np.vstack([val_l, val_r])
+            mag_min, mag_max = float(mags_2d.min()), float(mags_2d.max())
+            if mag_max > mag_min:
+                norm = (mags_2d - mag_min) / (mag_max - mag_min)
+            else:
+                norm = np.zeros_like(mags_2d)
+            if args.avg_algo == "Geo-Arc-Length":
+                log_f = np.log10(target_freqs)
+                norm_freqs = (log_f - log_f.min()) / (log_f.max() - log_f.min())
+                avg_norm = CurveAverager.geometric_arc_length_blend(norm_freqs, norm * 0.01) / 0.01
+            elif args.avg_algo == "Soft-DTW":
+                print("   -> Running Soft-DTW L/R average...")
+                # n_workers=1: this runs inside a chunk subprocess; the parallel
+                # chunk pool already provides the concurrency (no BLAS/thread fan-out).
+                avg_norm = CurveAverager.soft_dtw_barycenter(norm, gamma=args.lr_avg_gamma, n_workers=1)
+            else:
+                avg_norm = CurveAverager.arithmetic_mean(norm)
+            val_avg = CommonAxisInterpolator.unnormalize_magnitude(avg_norm, mag_min, mag_max)
 
     # 7. Generate Plot
     if args.graph_out:
+        plt = _get_pyplot()
         plt.figure(figsize=(10, 6))
         plt.semilogx(target_freqs, val_l, label='Left Ear', linewidth=2, alpha=0.8)
         plt.semilogx(target_freqs, val_r, label='Right Ear', linewidth=2, alpha=0.8, linestyle='--')
@@ -476,13 +613,11 @@ def run_dfhrtf(args):
 
         # Process L Ear
         mag_30L = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30L, 0, :], n=n_fft)) + 1e-12)
-        smooth_30L = smooth_fn(fft_freqs, mag_30L)
-        val_30L = np.interp(target_freqs, fft_freqs, smooth_30L)
+        val_30L = smooth_interp(smooth_fn, fft_freqs, mag_30L, target_freqs, bins)
 
         # Process R Ear
         mag_30R = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30R, 1, :], n=n_fft)) + 1e-12)
-        smooth_30R = smooth_fn(fft_freqs, mag_30R)
-        val_30R = np.interp(target_freqs, fft_freqs, smooth_30R)
+        val_30R = smooth_interp(smooth_fn, fft_freqs, mag_30R, target_freqs, bins)
 
         # Normalize — shared reference preserves the stereo pair's ILD
         if args.preserve_lr_balance:
@@ -512,6 +647,7 @@ def run_dfhrtf(args):
             val_30R = apply_spectral_tilt(target_freqs, val_30R, args.tilt, norm_freq_hz)
             
         # Plot
+        plt = _get_pyplot()
         plt.figure(figsize=(10, 6))
         plt.semilogx(target_freqs, val_30L, label='Left Ear (+30°)', linewidth=2, alpha=0.8)
         plt.semilogx(target_freqs, val_30R, label='Right Ear (-30°)', linewidth=2, alpha=0.8, linestyle='--')
@@ -529,43 +665,28 @@ def run_dfhrtf(args):
         print(f"   [+] Saved Stereo Plot: {os.path.basename(args.graph_stereo_out)}")
         plt.close()
 
-    # 7.6 Weighted Grid Plot (cleaned point set, color encodes solid-angle weight)
+    # 7.6 Weighted Grid Plot (all nodes; zero-weight ones grey, rest coloured by relative weight)
     if args.graph_weighted_out:
         print("   -> Plotting Weighted Grid...")
         src = sofa.SourcePosition
-        cart = spherical_to_cartesian(1.0, src[:, 0], src[:, 1])
-
+        radius = float(get_dominant_radius(src))
+        cart = spherical_to_cartesian(radius, src[:, 0], src[:, 1])
         mask = weights > 0                      # surviving (cleaned) points only
-        w = weights[mask]
-        cart_clean = cart[mask]
-
-        # Color range: manual fixed bounds or auto 1st–99th percentile
-        if args.grid_scale_mode == "manual":
-            vmin, vmax = args.grid_scale_low, args.grid_scale_high
-        else:
-            vmin = np.percentile(w, 1)
-            vmax = np.percentile(w, 99)
-
-        fig = plt.figure(figsize=(8, 8))
-        ax = fig.add_subplot(111, projection='3d')
-        sc = ax.scatter(
-            cart_clean[:, 0], cart_clean[:, 1], cart_clean[:, 2],
-            c=w, s=WEIGHTED_GRID_NODE_SIZE, cmap='viridis', alpha=0.85, vmin=vmin, vmax=vmax
-        )
-        plt.colorbar(sc, ax=ax, label='Solid-angle weight', shrink=0.6, pad=0.1)
-        title = f"Weighted grid — {int(mask.sum())} nodes"
         cov = grid_coverage(src[mask, 0], src[mask, 1])
-        if cov is not None:
-            draw_elevation_rings(ax, cov)
-            title += "\n" + format_elevation_range(cov.el_min, cov.el_max, cov.full_sphere)
-        ax.set_title(title)
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")
-        apply_unit_sphere_axes(ax)
-        plt.savefig(args.graph_weighted_out, dpi=150, bbox_inches='tight')
+
+        plt = _get_pyplot()
+        fig = plt.figure(figsize=FIGSIZE)
+        plot_weighted_grid(
+            fig, cart, weights,
+            name=os.path.splitext(os.path.basename(args.input))[0],
+            radius=radius, coverage=cov,
+            vmin=args.grid_scale_low, vmax=args.grid_scale_high,
+            auto_scale=(args.grid_scale_mode == "auto"),
+            weighting_mode=args.weighting_mode,
+        )
+        fig.savefig(args.graph_weighted_out, dpi=150)
         print(f"   [+] Saved Weighted Grid: {os.path.basename(args.graph_weighted_out)}")
-        plt.close()
+        plt.close(fig)
 
     # 8. Save Text Files
     if args.text_out_l:

@@ -3,4 +3,4 @@
 Keep in sync with the first versioned heading of CHANGELOG.md
 (guarded by tests/test_suite_health.py and tools/preflight.py).
 """
-__version__ = "0.6.0"
+__version__ = "0.7.0"

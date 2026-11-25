@@ -172,6 +172,19 @@ DESCRIPTIONS: dict[str, str] = {
         "Whether the weighted grid plot is computed per source folder or once "
         "across all input files."
     ),
+    "dfhrtf.advanced.weighted_grid_scale_mode": (
+        "Colour range of the weighted-grid plot. 'manual' uses the fixed "
+        "weighted_grid_rel_low/high range; 'auto' uses the 1st-99th percentile "
+        "of the relative weights."
+    ),
+    "dfhrtf.advanced.weighted_grid_rel_low": (
+        "Lower end of the manual weighted-grid colour range, in relative "
+        "solid-angle weight (weight x node count; 1 = mean)."
+    ),
+    "dfhrtf.advanced.weighted_grid_rel_high": (
+        "Upper end of the manual weighted-grid colour range, in relative "
+        "solid-angle weight (weight x node count; 1 = mean)."
+    ),
     "dfhrtf.graph_filename": (
         "Graph output filename template. "
         "Supported variables: {folder}, {filename}, {samplerate}, {tilt}, "

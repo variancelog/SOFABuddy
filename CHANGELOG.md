@@ -1,10 +1,16 @@
-## Unreleased
+## v0.7.0 (2026-11-25)
 
 ### Added
 - `tools/preflight.py`: pre-push checks for the things that drifted in past releases — app version vs CHANGELOG, a CHANGELOG entry for code changes since the last tag, README image links and unlinked screenshots, forbidden or oversized files in outgoing commits, and the test suite. `--release vX.Y.Z` also checks the tag on GitHub and flags screenshots that may be stale after UI changes; `--fast` skips the tests.
 - Test guards in `tests/test_suite_health.py`: the app version matches the top CHANGELOG heading, README image links resolve, and every screenshot in the repo root is linked from the README.
 
 ### Changed
+- **Weighted Grid** plot redrawn: nodes are coloured by relative weight (weight x node count, 1 = mean) on a fixed 0-2 range; the colorbar marks the grid's min/max (or "all = 1" when uniform); excluded zero-weight nodes are drawn grey; the two-line title shows radius, node count (with "+k excluded"), elevation range, Full/Partial Sphere and a weight summary; axes run exactly +-radius in metres (this replaces the earlier fixed +-1.05 axes for this plot; View Grid is unchanged); 10.5x8 figure with black-edged markers. Drawing lives in the new `core/grid_plot.py`.
+- The weighted-grid colour range settings moved to relative units: `dfhrtf.advanced.weighted_grid_scale_low/high` are replaced by `weighted_grid_rel_low/high` (defaults 0.0 and 2.0), and the `--grid-scale-*` CLI defaults now match (manual, 0.0, 2.0). Old saved values are ignored. 'auto' scale uses the 1st-99th percentile of the relative weights.
+- DFHRTF export is much faster, with identical output files. The per-SOFA L/R average is now computed only when the average text file is requested (it used to be computed and thrown away, which made every worker load pandas/tslearn/numba). Weighted-grid-only jobs skip the FFT, smoothing and normalisation entirely; jobs that would produce no file (Per Folder grid scope, no other outputs) are no longer sent to a worker. Smoothing is evaluated only at the FFT bins the output grid actually reads, the diffuse-field average runs in bounded blocks (a 41 MB measured file dropped from about 6.4 GB to about 0.3 GB peak memory per worker), and matplotlib, pandas and tslearn are imported only when needed.
+- SOFA mastering is faster, with identical output files. The uneq and dfeq variants of the same file and sample rate now share the work up to the LF splice, the grid-weight calculation is vectorised and reused, and a per-position calculation that only depended on the ear is done once.
+- The default per-SOFA L/R average algorithm (`dfhrtf.per_sofa_avg_algo`) is now Geo-Arc-Length (was Soft-DTW), which is far cheaper and needs no tslearn. Soft-DTW stays selectable.
+- README: View Grid and Weighted Grid screenshots updated to the new plot style.
 - The app version now lives only in `core/version.py`; the window title reads it.
 - Filename docs: `{samplerate}` is no longer listed for DFHRTF graph filenames, which never substituted it. The README's variable table now also lists where each variable works in the average-file names, and names the three average templates that are only set in `user_settings.json`.
 

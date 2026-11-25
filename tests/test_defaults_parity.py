@@ -139,8 +139,8 @@ _DFHRTF_ARG_TO_JSON = {
     "lf_blend_high_oct":      "dfhrtf.advanced.lf_blend_high_oct",
     "stereo_angle":           "dfhrtf.advanced.stereo_angle_deg",
     "grid_scale_mode":        "dfhrtf.advanced.weighted_grid_scale_mode",
-    "grid_scale_low":         "dfhrtf.advanced.weighted_grid_scale_low",
-    "grid_scale_high":        "dfhrtf.advanced.weighted_grid_scale_high",
+    "grid_scale_low":         "dfhrtf.advanced.weighted_grid_rel_low",
+    "grid_scale_high":        "dfhrtf.advanced.weighted_grid_rel_high",
     "preserve_lr_balance":    "dfhrtf.advanced.preserve_lr_balance",
     "var_smooth_freq_low":    "dfhrtf.advanced.variable_smoothing_freq_low",
     "var_smooth_freq_hi":     "dfhrtf.advanced.variable_smoothing_freq_hi",
@@ -179,9 +179,9 @@ _KNOWN_INTENTIONAL_DIVERGENCES = {
                            "it shows in the dropdown."),
     },
     "dfhrtf": {
-        "avg_algo":          ("Arithmetic Mean", "Soft-DTW",
+        "avg_algo":          ("Arithmetic Mean", "Geo-Arc-Length",
                               "CLI keeps the cheap arithmetic mean as its default; the "
-                              "GUI factory default is Soft-DTW."),
+                              "GUI factory default is Geo-Arc-Length."),
         "delimiter":         ("\t", "Tab",
                               "CLI takes the literal delimiter character; the GUI stores "
                               "the human-readable name and translates it."),
@@ -194,14 +194,6 @@ _KNOWN_INTENTIONAL_DIVERGENCES = {
         "lf_blend_low_oct":  (0.50, 0.33,
                               "CLI keeps the original wider LF crossfade; the GUI factory "
                               "default was narrowed with the 1 kHz crossover change."),
-        "grid_scale_mode":   ("auto", "manual",
-                              "CLI defaults to percentile auto-scaling; the GUI factory "
-                              "default pins a fixed manual color range for comparability."),
-        "grid_scale_low":    (0.001, 0.0001,
-                              "Manual color range is only used in the GUI's manual mode; "
-                              "the CLI's values belong to its own auto/manual pairing."),
-        "grid_scale_high":   (0.003, 0.0025,
-                              "Same manual color-range pairing as grid_scale_low."),
         "preserve_lr_balance": (False, True,
                               "store_true flag: off unless passed on the CLI; the GUI "
                               "factory default turns ILD preservation on."),

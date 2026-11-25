@@ -78,7 +78,10 @@ def smoothing_profile(freq: np.ndarray, params: SmoothingParams) -> np.ndarray:
 
 
 def variable_smooth(
-    freq: np.ndarray, mag_db: np.ndarray, params: SmoothingParams
+    freq: np.ndarray,
+    mag_db: np.ndarray,
+    params: SmoothingParams,
+    indices: np.ndarray | None = None,
 ) -> np.ndarray:
     """Apply frequency-dependent fractional-octave smoothing to a magnitude curve.
 
@@ -86,9 +89,13 @@ def variable_smooth(
         freq: Frequencies in Hz, strictly increasing. Shape (M,).
         mag_db: Magnitudes in dB at ``freq``. Shape (M,).
         params: Smoothing parameters.
+        indices: Optional integer positions into ``freq``. When given, only those
+            output points are computed (each point is independent, so the values
+            equal ``variable_smooth(freq, mag_db, params)[indices]`` exactly) and
+            the result has shape ``(len(indices),)``.
 
     Returns:
-        Smoothed magnitude in dB, same shape as ``mag_db``.
+        Smoothed magnitude in dB, same shape as ``mag_db`` (or ``indices``).
     """
     freq = np.asarray(freq, dtype=float)
     mag_db = np.asarray(mag_db, dtype=float)
@@ -97,6 +104,7 @@ def variable_smooth(
         return mag_db.copy()
     if n != mag_db.size:
         raise ValueError("freq and mag_db must have the same length")
+    idx = np.arange(n) if indices is None else np.asarray(indices, dtype=np.intp)
 
     log_f = np.log2(np.clip(freq, 1e-9, None))
 
@@ -112,24 +120,26 @@ def variable_smooth(
     # take the weighted mean, then the cube root, and convert back to dB.
     lin = 10.0 ** (mag_db / 20.0) if cubic else None
 
-    out = np.empty(n, dtype=float)
-    for i in range(n):
+    out = np.empty(idx.size, dtype=float)
+    # Window bounds via search on the monotonic log-frequency axis, vectorised
+    # over every requested point.
+    half_all = _WINDOW_SIGMA * sigma[idx]
+    lo_all = np.searchsorted(log_f, log_f[idx] - half_all, side="left")
+    hi_all = np.searchsorted(log_f, log_f[idx] + half_all, side="right")
+    for k in range(idx.size):
+        i = idx[k]
         s = sigma[i]
-        half = _WINDOW_SIGMA * s
-        lo_f = log_f[i] - half
-        hi_f = log_f[i] + half
-        # Window bounds via search on the monotonic log-frequency axis.
-        lo_idx = np.searchsorted(log_f, lo_f, side="left")
-        hi_idx = np.searchsorted(log_f, hi_f, side="right")
+        lo_idx = lo_all[k]
+        hi_idx = hi_all[k]
         if hi_idx - lo_idx <= 1:
-            out[i] = mag_db[i]
+            out[k] = mag_db[i]
             continue
         d = log_f[lo_idx:hi_idx] - log_f[i]
         w = np.exp(-0.5 * (d / s) ** 2)
         if cubic:
             seg = lin[lo_idx:hi_idx]
             cube_mean = np.dot(w, seg ** 3) / w.sum()
-            out[i] = 20.0 * np.log10(cube_mean ** (1.0 / 3.0))
+            out[k] = 20.0 * np.log10(cube_mean ** (1.0 / 3.0))
         else:
-            out[i] = np.dot(w, mag_db[lo_idx:hi_idx]) / w.sum()
+            out[k] = np.dot(w, mag_db[lo_idx:hi_idx]) / w.sum()
     return out

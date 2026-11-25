@@ -34,7 +34,7 @@
     "enabled": false,
     "per_sofa_lr": true,
     "per_sofa_avg": false,
-    "per_sofa_avg_algo": "Soft-DTW",
+    "per_sofa_avg_algo": "Geo-Arc-Length",
     "per_sofa_avg_filename": "{filename} avg LR",
     "text_filename": "{filename} {LR}",
     "text_delimiter": "Tab",
@@ -63,8 +63,8 @@
       "stereo_angle_deg": 30.0,
 
       "weighted_grid_scale_mode": "manual",
-      "weighted_grid_scale_low": 0.0001,
-      "weighted_grid_scale_high": 0.0025,
+      "weighted_grid_rel_low": 0.0,
+      "weighted_grid_rel_high": 2.0,
       "preserve_lr_balance": true,
 
       "variable_smoothing_freq_low": 350.0,

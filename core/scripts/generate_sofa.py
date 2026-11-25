@@ -1,4 +1,6 @@
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -10,7 +12,6 @@ import warnings
 warnings.filterwarnings("ignore", message=r".*doesn't match a supported version.*")
 import numpy as np  # noqa: E402
 import sofar as sf  # noqa: E402
-import scipy.signal as signal  # noqa: E402
 import scipy.fft as fft  # noqa: E402
 
 # Bootstrap project root onto sys.path so core.* imports work when this script
@@ -29,6 +30,24 @@ OUTPUT_LENGTH = 512
 NORM_TARGET_DB = -1.0
 DEFAULT_ONSET_BUFFER = 32 # Samples of silence before the aligned impulse starts
 # =================================================
+
+
+def _hilbert(x):
+    """Analytic signal along the last axis (same algorithm as scipy.signal.hilbert).
+
+    Reimplemented on scipy.fft so that importing scipy.signal (~1.5 s of
+    subprocess start-up, mostly scipy.stats/interpolate) is only paid when
+    resampling is actually required.
+    """
+    N = x.shape[-1]
+    Xf = fft.fft(x, N, axis=-1)
+    if N % 2 == 0:
+        Xf[..., 1:N // 2] *= 2.0
+        Xf[..., N // 2 + 1:N] = 0.0
+    else:
+        Xf[..., 1:(N + 1) // 2] *= 2.0
+        Xf[..., (N + 1) // 2:N] = 0.0
+    return fft.ifft(Xf, axis=-1)
 
 
 def find_global_onset(hrirs, threshold_ratio):
@@ -79,28 +98,26 @@ def get_blend_weights(freqs, crossover_f, blend_low_oct=0.50, blend_high_oct=0.7
         weights[mask_blend] = (1.0 - np.cos(phase)) / 2.0
     return weights
 
-def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
-    print(f"\n--- Generating: {os.path.basename(output_path)} ---")
+def _prepare_master(raw_sofa, target_fs, args):
+    """Steps 1-6: everything up to and including the LF splice.
 
+    Depends only on (raw_sofa, target_fs, args) -- not on whether DFEQ is applied --
+    so the uneq and dfeq variants of one input/samplerate share it.  Returns a
+    bundle dict that _finish_master() treats as read-only.
+    """
     # Resolve advanced params from args (with module-constant fallbacks for legacy calls)
     processing_length    = getattr(args, 'processing_length',    PROCESSING_LENGTH)
-    norm_target_db       = getattr(args, 'norm_target_db',       NORM_TARGET_DB)
     onset_buffer         = getattr(args, 'onset_buffer',         DEFAULT_ONSET_BUFFER)
     onset_threshold      = getattr(args, 'onset_threshold',      0.05)
     blend_low_oct        = getattr(args, 'blend_low_oct',        0.50)
     blend_high_oct       = getattr(args, 'blend_high_oct',       0.75)
-    ild_fix              = getattr(args, 'ild_fix',              False)
-    ild_threshold        = getattr(args, 'ild_threshold',        1.5)
-    ild_low_freq         = getattr(args, 'ild_low_freq',         300.0)
-    ild_high_freq        = getattr(args, 'ild_high_freq',        6000.0)
     debug_dump           = getattr(args, 'debug_dump',           None)  # diag-only; see --debug-dump
 
     # Diagnostic capture (only populated when debug_dump is set; zero effect otherwise)
     dbg = {} if debug_dump else None
 
-    out_sofa = raw_sofa.copy()
-    hrirs = out_sofa.Data_IR.copy()
-    src_fs = float(out_sofa.Data_SamplingRate)
+    hrirs = raw_sofa.Data_IR.copy()
+    src_fs = float(raw_sofa.Data_SamplingRate)
     M, R, N = hrirs.shape
 
     # 1. Resample
@@ -109,6 +126,7 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
         gcd = math.gcd(int(src_fs), int(target_fs))
         up = int(target_fs) // gcd
         down = int(src_fs) // gcd
+        import scipy.signal as signal  # deferred: slow import, only needed here
         hrirs = signal.resample_poly(hrirs, up, down, axis=-1)
         N = hrirs.shape[-1]
     else:
@@ -129,7 +147,7 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
     base_shift = onset_buffer - global_onset
     
     if args.harmonize_radius:
-        orig_r = get_dominant_radius(out_sofa.SourcePosition)
+        orig_r = get_dominant_radius(raw_sofa.SourcePosition)
         target_r = args.target_radius
         gain_multiplier = orig_r / target_r
 
@@ -160,13 +178,14 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
 
     # 5. Calculate Weights for Diffuse Field Calculation (Raw)
     weights = calculate_geometric_weights(
-        out_sofa.SourcePosition,
+        raw_sofa.SourcePosition,
         advanced_dfeq=True,
         weighting_mode=args.weighting_mode,
     )
     weights_expanded = weights[:, np.newaxis, np.newaxis]
     
-    P_raw = np.abs(H_raw)**2
+    mag_raw = np.abs(H_raw)
+    P_raw = mag_raw**2
     DF_power = np.sum(P_raw * weights_expanded, axis=0)
     DF_mag = np.sqrt(DF_power) # (R, N_bins)
     
@@ -199,15 +218,14 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
 
     ##
     # 6.d.2 Apply Minimum Phase LF Splicing
-    H_rep = H_raw.copy()
+    H_rep = H_raw  # never mutated in place below; no copy needed
     if args.lf_extend and base_target is not None and scaled_lf_target is not None:
         print(f"   4. Splicing Ideal LF Response (Crossover: {crossover_f} Hz using Phase Blending)...")
         
         # --- A. Extract Minimum Phase and Excess Phase of Raw HRIR ---
-        mag_raw = np.abs(H_raw)
         log_mag_raw = np.log(mag_raw + 1e-12)
         full_log_mag_raw = np.concatenate([log_mag_raw, log_mag_raw[..., -2:0:-1]], axis=-1)
-        min_phase_raw = -np.imag(signal.hilbert(full_log_mag_raw, axis=-1))[..., :H_raw.shape[-1]]
+        min_phase_raw = -np.imag(_hilbert(full_log_mag_raw))[..., :H_raw.shape[-1]]
         
         phase_raw = np.unwrap(np.angle(H_raw), axis=-1)
         excess_phase = phase_raw - min_phase_raw
@@ -215,14 +233,11 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
         H_raw_min = mag_raw * np.exp(1j * min_phase_raw)
 
         # --- B. Create Pure Minimum-Phase Synthetic LF ---
-        H_synthetic_min = np.zeros_like(H_raw)
-        for m in range(M):
-            for r in range(R):
-                log_base = np.log(scaled_lf_target[r] + 1e-12)
-                full_log_base = np.concatenate([log_base, log_base[-2:0:-1]])
-                min_phase_base = -np.imag(signal.hilbert(full_log_base))[:len(base_target)]
-                
-                H_synthetic_min[m, r, :] = scaled_lf_target[r] * np.exp(1j * min_phase_base)
+        # Depends only on the receiver, so compute once per r and broadcast over M.
+        log_base = np.log(scaled_lf_target + 1e-12)
+        full_log_base = np.concatenate([log_base, log_base[..., -2:0:-1]], axis=-1)
+        min_phase_base = -np.imag(_hilbert(full_log_base))[..., :len(base_target)]
+        H_synthetic_min = scaled_lf_target * np.exp(1j * min_phase_base)   # (R, bins)
         
         # --- C. Blend in the Minimum Phase Domain (Solves Comb Filtering) ---
         H_rep_min = H_synthetic_min * (1.0 - blend_weights) + H_raw_min * blend_weights
@@ -240,12 +255,15 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
         # slip cancels; magnitude weighting ignores noisy near-null bins.
         # SIMULATED files (clean phase) are unaffected — the estimate matches the
         # old single-point value to a fraction of a sample.
-        excess_c = (H_raw / (mag_raw + 1e-12)) * np.exp(-1j * min_phase_raw)  # unit modulus
         f_lo_fit = crossover_f / (2 ** blend_low_oct)   # exact-match edge (f_low)
         f_hi_fit = crossover_f * 2.0
         fit_idx = np.where((freqs >= f_lo_fit) & (freqs <= f_hi_fit))[0]
         if fit_idx.size >= 2:
-            dphi = np.angle(excess_c[..., fit_idx[1:]] * np.conj(excess_c[..., fit_idx[:-1]]))
+            # Unit-modulus excess phasor, evaluated only on the fit bins (elementwise,
+            # so identical to computing it over every bin and indexing).
+            excess_c = (H_raw[..., fit_idx] / (mag_raw[..., fit_idx] + 1e-12)) \
+                * np.exp(-1j * min_phase_raw[..., fit_idx])
+            dphi = np.angle(excess_c[..., 1:] * np.conj(excess_c[..., :-1]))
             d_f = np.diff(freqs[fit_idx])
             w_fit = np.minimum(mag_raw[..., fit_idx[1:]], mag_raw[..., fit_idx[:-1]])
             num = np.sum(w_fit * (-dphi) * (2 * np.pi * d_f), axis=-1)
@@ -288,8 +306,62 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
                 delay_sec_arr=delay_sec_arr,
             ))
 
+    return dict(
+        N=N, H_rep=H_rep, weights_expanded=weights_expanded, DF_mag=DF_mag,
+        anchor_level=anchor_level, dbg=dbg,
+        orig_r=orig_r if args.harmonize_radius else None,
+    )
 
-    # 7. Step C: Apply Unified Diffuse Field EQ (if DFEQ is ON)
+
+def _prepare_master_logged(raw_sofa, target_fs, args):
+    """_prepare_master plus a record of its printed lines (for replay on reuse)."""
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            prep = _prepare_master(raw_sofa, target_fs, args)
+    finally:
+        print(buf.getvalue(), end='')
+    prep['log'] = buf.getvalue()
+    return prep
+
+
+def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args, _prep_cache=None):
+    """Master one output.  `_prep_cache` (a dict, used by run_manifest) keeps the
+    most recent steps-1-6 bundle so consecutive jobs for the same input object,
+    target_fs and args (e.g. the uneq and dfeq variants) skip recomputing it."""
+    print(f"\n--- Generating: {os.path.basename(output_path)} ---")
+    prep = None
+    if _prep_cache is not None and not getattr(args, 'debug_dump', None):
+        if (_prep_cache.get('raw') is raw_sofa and _prep_cache.get('args') is args
+                and _prep_cache.get('fs') == target_fs):
+            prep = _prep_cache['prep']
+            print(prep['log'], end='')
+        else:
+            _prep_cache.clear()  # drop the old bundle before building the new one
+            prep = _prepare_master_logged(raw_sofa, target_fs, args)
+            _prep_cache.update(raw=raw_sofa, args=args, fs=target_fs, prep=prep)
+    else:
+        prep = _prepare_master_logged(raw_sofa, target_fs, args)
+    _finish_master(raw_sofa, prep, target_fs, apply_dfeq, output_path, args)
+
+
+def _finish_master(raw_sofa, prep, target_fs, apply_dfeq, output_path, args):
+    """Steps 7-13 (DFEQ onward).  Never mutates the arrays in `prep`."""
+    norm_target_db       = getattr(args, 'norm_target_db',       NORM_TARGET_DB)
+    onset_buffer         = getattr(args, 'onset_buffer',         DEFAULT_ONSET_BUFFER)
+    ild_fix              = getattr(args, 'ild_fix',              False)
+    ild_threshold        = getattr(args, 'ild_threshold',        1.5)
+    ild_low_freq         = getattr(args, 'ild_low_freq',         300.0)
+    ild_high_freq        = getattr(args, 'ild_high_freq',        6000.0)
+    debug_dump           = getattr(args, 'debug_dump',           None)
+    N, H_rep, weights_expanded = prep['N'], prep['H_rep'], prep['weights_expanded']
+    DF_mag, anchor_level, orig_r = prep['DF_mag'], prep['anchor_level'], prep['orig_r']
+    dbg = dict(prep['dbg']) if debug_dump else None
+    out_sofa = raw_sofa.copy()
+    if args.harmonize_radius:
+        target_r = args.target_radius
+
+  # 7. Step C: Apply Unified Diffuse Field EQ (if DFEQ is ON)
     H_final = H_rep
     if apply_dfeq:
         print("   5. Applying Unified Diffuse Field EQ...")
@@ -303,7 +375,7 @@ def master_sofa(raw_sofa, target_fs, apply_dfeq, output_path, args):
         
         log_eq = np.log(eq_filter_mag + 1e-12)
         full_log_eq = np.concatenate([log_eq, log_eq[..., -2:0:-1]], axis=-1)
-        min_phase_eq = -np.imag(signal.hilbert(full_log_eq, axis=-1))
+        min_phase_eq = -np.imag(_hilbert(full_log_eq))
         min_phase_eq = min_phase_eq[..., :eq_filter_mag.shape[-1]]
         
         complex_eq = eq_filter_mag * np.exp(1j * min_phase_eq)
@@ -443,6 +515,7 @@ def run_manifest(manifest_path):
     exit_code = 0
     cached_input = None
     cached_sofa = None
+    prep_cache = {}  # one-entry steps-1-6 cache; see master_sofa()
 
     for job in manifest.get("jobs", []):
         input_path = job.get("input")
@@ -454,7 +527,7 @@ def run_manifest(manifest_path):
                 cached_input = input_path
 
             master_sofa(cached_sofa, job["target_fs"], bool(job.get("dfeq", False)),
-                        job["output"], common_ns)
+                        job["output"], common_ns, _prep_cache=prep_cache)
             print(f"[JOB OK] {input_path}")
         except Exception as e:
             exit_code = 1

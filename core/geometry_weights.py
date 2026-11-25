@@ -111,6 +111,58 @@ def _is_equal_weight_design(cart_coords, tol=1e-6):
     return True
 
 
+_WEIGHT_CACHE = {}
+
+
+def _hull_weights(cart_coords, final_idx, n_total):
+    """Ghost-node ConvexHull solid-angle weights, normalised to sum 1.
+
+    Augments the real measurement grid with a dense Fibonacci-sphere cap of
+    dummy points placed below the dataset's lowest real point.  This closes
+    the ConvexHull for open/hemispherical grids (e.g. ARI) so that every
+    real measurement node receives a solid-angle weight proportional to its
+    true coverage area rather than benefiting from the artificial "floor"
+    that the bare-hull algorithm creates.
+    """
+    # 1. Dense Fibonacci-sphere dummy points
+    samples = 1000
+    indices = np.arange(0, samples, dtype=float) + 0.5
+    phi = np.arccos(1 - 2 * indices / samples)
+    theta = np.pi * (1 + 5 ** 0.5) * indices
+
+    gx = np.cos(theta) * np.sin(phi)
+    gy = np.sin(theta) * np.sin(phi)
+    gz = np.cos(phi)
+    ghost_coords = np.column_stack((gx, gy, gz))
+
+    # 2. Keep only ghosts that fall below the real dataset's lowest point
+    min_z = np.min(cart_coords[:, 2])
+    ghost_coords = ghost_coords[ghost_coords[:, 2] < (min_z - 0.01)]
+
+    # 3. Build hull over the closed (real + ghost) point set
+    cart_coords_closed = np.vstack((cart_coords, ghost_coords))
+    hull = ConvexHull(cart_coords_closed)
+
+    # Vectorised triangle areas; bincount accumulates in flattened
+    # simplex/vertex order, matching the per-triangle loop exactly.
+    simplices = hull.simplices
+    P = cart_coords_closed[simplices]            # (T, 3, 3)
+    cross_prod = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0])
+    area = 0.5 * np.sqrt(np.sum(cross_prod * cross_prod, axis=1))
+    temp_weights = np.bincount(simplices.ravel(),
+                               weights=np.repeat(area / 3.0, 3),
+                               minlength=len(cart_coords_closed))
+
+    # 4. Strip ghost-node weights; keep only real-node weights
+    real_weights = temp_weights[:len(cart_coords)]
+
+    # 5. Map back and normalise
+    weights = np.zeros(n_total)
+    weights[final_idx] = real_weights
+    weights /= np.sum(weights)
+    return weights
+
+
 def calculate_geometric_weights(source_pos, advanced_dfeq=True,
                                 weighting_mode='auto'):
     """Calculate solid-angle weights for spherical diffuse-field integration.
@@ -172,51 +224,27 @@ def calculate_geometric_weights(source_pos, advanced_dfeq=True,
         print(f"   [Weighting] Uniform (1/{len(final_idx)})")
         return _uniform_weights()
 
-    # ── Ghost-node ConvexHull solid-angle weights ────────────────────────────
-    # Augments the real measurement grid with a dense Fibonacci-sphere cap of
-    # dummy points placed below the dataset's lowest real point.  This closes
-    # the ConvexHull for open/hemispherical grids (e.g. ARI) so that every
-    # real measurement node receives a solid-angle weight proportional to its
-    # true coverage area rather than benefiting from the artificial "floor"
-    # that the bare-hull algorithm creates.
-    try:
-        # 1. Dense Fibonacci-sphere dummy points
-        samples = 1000
-        indices = np.arange(0, samples, dtype=float) + 0.5
-        phi = np.arccos(1 - 2 * indices / samples)
-        theta = np.pi * (1 + 5 ** 0.5) * indices
-
-        gx = np.cos(theta) * np.sin(phi)
-        gy = np.sin(theta) * np.sin(phi)
-        gz = np.cos(phi)
-        ghost_coords = np.column_stack((gx, gy, gz))
-
-        # 2. Keep only ghosts that fall below the real dataset's lowest point
-        min_z = np.min(cart_coords[:, 2])
-        ghost_coords = ghost_coords[ghost_coords[:, 2] < (min_z - 0.01)]
-
-        # 3. Build hull over the closed (real + ghost) point set
-        cart_coords_closed = np.vstack((cart_coords, ghost_coords))
-        hull = ConvexHull(cart_coords_closed)
-
-        weights = np.zeros(len(source_pos))
-        temp_weights = np.zeros(len(cart_coords_closed))
-        for simplex in hull.simplices:
-            A, B, C = cart_coords_closed[simplex]
-            cross_prod = np.cross(B - A, C - A)
-            area = 0.5 * np.linalg.norm(cross_prod)
-            temp_weights[simplex] += area / 3.0
-
-        # 4. Strip ghost-node weights; keep only real-node weights
-        real_weights = temp_weights[:len(cart_coords)]
-
-        # 5. Map back and normalise
-        weights[final_idx] = real_weights
-        weights /= np.sum(weights)
-
-    except Exception as e:
-        print(f"[Warning] Weight calculation fallback used: {e}")
+    # The hull weights and the design test depend only on the cleaned point
+    # set, so repeated calls on the same SourcePosition (SR/EQ variants, ILD
+    # audit) reuse them.  Messages are replayed so output is unchanged.
+    key = (cart_coords.shape, cart_coords.tobytes(), len(source_pos),
+           final_idx.tobytes())
+    entry = _WEIGHT_CACHE.get(key)
+    if entry is None:
+        entry = {'weights': None, 'warn': None, 'design': None}
+        try:
+            entry['weights'] = _hull_weights(cart_coords, final_idx,
+                                             len(source_pos))
+        except Exception as e:
+            entry['warn'] = f"[Warning] Weight calculation fallback used: {e}"
+        if len(_WEIGHT_CACHE) >= 8:
+            _WEIGHT_CACHE.pop(next(iter(_WEIGHT_CACHE)))
+        _WEIGHT_CACHE[key] = entry
+    if entry['warn'] is not None:
+        print(entry['warn'])
         weights = np.ones(len(source_pos)) / len(source_pos)
+    else:
+        weights = entry['weights'].copy()
 
     if mode == 'geometric':
         return weights
@@ -227,7 +255,9 @@ def calculate_geometric_weights(source_pos, advanced_dfeq=True,
     # computed above only add error.  We test that property directly — it is
     # provenance-free and, unlike the old geo-weight-CV heuristic, has no
     # threshold overlap between designs (~1e-11) and measured grids (~1e0).
-    if _is_equal_weight_design(cart_coords):
+    if entry['design'] is None:
+        entry['design'] = _is_equal_weight_design(cart_coords)
+    if entry['design']:
         print("   [Weighting] Auto -> uniform  "
               "(grid passes spherical-design quadrature test)")
         return _uniform_weights()

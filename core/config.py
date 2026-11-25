@@ -185,8 +185,8 @@ SCHEMA: dict[str, dict] = {
     "dfhrtf.advanced.stereo_angle_deg":      {"type": float, "min": 0.0, "max": 90.0},
 
     "dfhrtf.advanced.weighted_grid_scale_mode":    {"type": str, "choices": ["auto", "manual"]},
-    "dfhrtf.advanced.weighted_grid_scale_low":     {"type": float, "min": 0.0, "max": 1.0},
-    "dfhrtf.advanced.weighted_grid_scale_high":    {"type": float, "min": 0.0, "max": 1.0},
+    "dfhrtf.advanced.weighted_grid_rel_low":       {"type": float, "min": 0.0, "max": 10.0},
+    "dfhrtf.advanced.weighted_grid_rel_high":      {"type": float, "min": 0.0, "max": 10.0},
     "dfhrtf.advanced.preserve_lr_balance":         {"type": bool},
 
     "dfhrtf.advanced.variable_smoothing_freq_low":  {"type": float, "min": 20.0,  "max": 2000.0},

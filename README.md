@@ -181,10 +181,10 @@ Three algorithms are available for both **global averages** (Post Processing) an
 
 ![Grid viewer](GridViewer_V3.png)
 
-**Weighted Grid** (DFHRTF tab) saves a plot of the solid-angle-weighted grid used in the DFHRTF calculation — node color encodes each node's relative solid-angle weight (uniform node size); the title shows the elevation range of the surviving nodes, with dashed boundary rings at the open ends of partial grids. Use **Per Folder** scope for one representative plot per source folder, or **All Files** for a plot per SOFA file.
+**Weighted Grid** (DFHRTF tab) saves a plot of the solid-angle-weighted grid used in the DFHRTF calculation — node color encodes each node's relative solid-angle weight (weight x node count, so 1 = the mean) on a fixed 0 to 2 color range, so grids can be compared side by side. The colorbar marks the grid's lowest and highest weight (or "all = 1" for a uniform grid). Nodes left out of the DFHRTF calculation (off-radius or duplicate positions) are drawn grey. The title gives the radius, node count, elevation range and Full/Partial Sphere, with a second line summarising the weights; dashed boundary rings mark the open ends of partial grids. Use **Per Folder** scope for one representative plot per source folder, or **All Files** for a plot per SOFA file.
 
-![Measurement grid (raw)](plot_grid_raw.png)
-![Measurement grid (weighted)](plot_grid_weighted.png)
+![Measurement grid (raw)](plot_grid_raw_v2.png)
+![Measurement grid (weighted)](plot_grid_weighted_v2.png)
 
 ## Settings and Persistence
 

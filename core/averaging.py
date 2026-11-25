@@ -1,16 +1,21 @@
+from __future__ import annotations
+
 import os
 import numpy as np
-import pandas as pd
 import concurrent.futures
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize
 from scipy.spatial.distance import pdist, squareform
 from typing import List, Dict
-from tslearn.metrics import cdist_soft_dtw, SquaredEuclidean, SoftDTW
+
+# pandas and tslearn (which pulls in numba) are imported lazily inside the
+# functions that need them: they cost several seconds of import time, and the
+# Arithmetic / Geo-Arc-Length paths never touch them.
 
 # --- Helper Functions for Soft-DTW ---
 
 def _sdtw_worker(Z, X_i, gamma):
+    from tslearn.metrics import SquaredEuclidean, SoftDTW
     D = SquaredEuclidean(Z, X_i)
     sdtw = SoftDTW(D, gamma=gamma)
     return sdtw.compute(), D.jacobian_product(sdtw.grad())
@@ -65,6 +70,7 @@ class DataIngestor:
         Loads a CSV file and attempts to identify frequency and magnitude columns.
         Returns a DataFrame with standardized 'frequency' and 'magnitude' columns.
         """
+        import pandas as pd
         try:
             # save_text_data() only writes a header row for .csv output --
             # every other delimiter/extension combo is headerless, so the
