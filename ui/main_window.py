@@ -1,4 +1,5 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QPlainTextEdit, QSplitter, QFileDialog
+import os
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QPlainTextEdit, QSplitter, QFileDialog, QMessageBox
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QIcon
 from pathlib import Path
@@ -172,9 +173,42 @@ class SofaBuddyMainWindow(QMainWindow):
         for w in mgr.warnings:
             self.append_error(f"[Config] {w}")
 
-        self.set_output_config(cfg.get('output', {}))
-        self.tab_sofa.set_config(cfg.get('sofa', {}))
-        self.tab_dfhrtf.set_config(cfg.get('dfhrtf', {}))
+        try:
+            self.set_output_config(cfg.get('output', {}))
+            self.tab_sofa.set_config(cfg.get('sofa', {}))
+            self.tab_dfhrtf.set_config(cfg.get('dfhrtf', {}))
+        except Exception as exc:    # bad saved values must not prevent startup
+            self.append_error(f"[Config] Could not apply saved settings ({exc}); using defaults.")
+            defaults = C.load_defaults()
+            self.set_output_config(defaults.get('output', {}))
+            self.tab_sofa.set_config(defaults.get('sofa', {}))
+            self.tab_dfhrtf.set_config(defaults.get('dfhrtf', {}))
+
+        # Shown later by show_startup_notices(), once the splash screen has
+        # closed: a modal dialog opened here would sit behind the
+        # always-on-top splash.
+        self._startup_mgr = mgr
+
+    def show_startup_notices(self) -> None:
+        """Show any one-time settings-migration notice. main.pyw calls this
+        after the splash closes and the window is visible; it runs once."""
+        mgr, self._startup_mgr = getattr(self, "_startup_mgr", None), None
+        if mgr is not None:
+            self._show_migration_notices(mgr)
+
+    def _show_migration_notices(self, mgr) -> None:
+        """Tell the user once what an older settings file was migrated to, then
+        save at once so the file is current and the message never repeats.
+
+        Skipped when SOFA_BUDDY_NO_POPUPS is set (the test suite sets it so a
+        modal dialog can't block a run, and tests never rewrite a real settings
+        file).
+        """
+        notices = mgr.notices
+        if not notices or os.environ.get("SOFA_BUDDY_NO_POPUPS"):
+            return
+        QMessageBox.information(self, "Settings updated", "\n\n".join(notices))
+        mgr.save(mgr.snapshot(self.get_output_config(), self.tab_sofa, self.tab_dfhrtf))
 
     def _on_reset_clicked(self) -> None:
         """Reset all settings to factory defaults and update the tabs."""

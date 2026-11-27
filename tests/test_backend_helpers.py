@@ -13,7 +13,6 @@ from core.averaging import _fractional_octave_grid
 from core.scripts.generate_sofa import get_blend_weights
 from core.scripts.generate_dfhrtf import (
     apply_lf_extension,
-    apply_smoothing,
     apply_spectral_tilt,
     find_closest_grid_point,
     generate_fractional_octave_frequencies,
@@ -95,31 +94,68 @@ class TestApplySpectralTilt:
 
 class TestMakeSmoother:
     """`make_smoother(args)` dispatches on `args.smoothing`, returning
-    `(smooth_fn, label)`."""
+    `(smooth_fn, label)`; `smooth_fn(freqs, mags, out_freqs)` evaluates the
+    smoothed spectrum directly at `out_freqs`."""
+
+    OUT = np.array([100.0, 1000.0, 5000.0, 12000.0, 19000.0])
+
+    def _data(self, seed):
+        freqs = _log_freqs(20.0, 24000.0, 400)
+        return freqs, np.random.default_rng(seed).normal(0.0, 2.0, freqs.size)
 
     def test_variable_mode_dispatch(self, dfhrtf_args):
-        from core.smoothing import SmoothingParams, variable_smooth
+        from core.smoothing import SmoothingParams, parse_profile, variable_smooth
 
         args = dfhrtf_args(smoothing="variable")
         smooth_fn, label = make_smoother(args)
         assert callable(smooth_fn)
         assert label == "Variable Smoothing"
 
-        freqs = _log_freqs(20.0, 20000.0, 400)
-        rng = np.random.default_rng(0)
-        mags = rng.normal(0.0, 2.0, freqs.size)
-
+        freqs, mags = self._data(0)
         params = SmoothingParams(
-            freq_low=args.var_smooth_freq_low,
-            freq_hi=args.var_smooth_freq_hi,
-            n_low=args.var_smooth_n_low,
-            n_hi=args.var_smooth_n_hi,
-            gamma=args.var_smooth_gamma,
-            mean_mode=args.var_smooth_mean_mode,
+            points=parse_profile(args.var_smooth_profile),
+            mean_mode=args.smoothing_mean_mode,
+            window=args.smoothing_window,
         )
         np.testing.assert_allclose(
-            smooth_fn(freqs, mags), variable_smooth(freqs, mags, params), atol=1e-12
+            smooth_fn(freqs, mags, self.OUT),
+            variable_smooth(freqs, mags, params, self.OUT), atol=1e-12,
         )
+
+    def test_profile_and_window_flags_reach_the_smoother(self, dfhrtf_args):
+        from core.smoothing import SmoothingParams, parse_profile, variable_smooth
+
+        profile = "500:3,2000:6:0.7,9000:6,15000:24:2"
+        args = dfhrtf_args(smoothing="variable", var_smooth_profile=profile,
+                           smoothing_window="flat", smoothing_mean_mode="db")
+        smooth_fn, _ = make_smoother(args)
+        freqs, mags = self._data(5)
+        expected = variable_smooth(
+            freqs, mags,
+            SmoothingParams(points=parse_profile(profile), mean_mode="db", window="flat"),
+            self.OUT)
+        np.testing.assert_allclose(smooth_fn(freqs, mags, self.OUT), expected, atol=1e-12)
+
+    @pytest.mark.parametrize("window", ["gaussian", "flat"])
+    def test_window_applies_to_fixed_smoothing(self, dfhrtf_args, window):
+        from core.smoothing import fixed_smooth
+
+        args = dfhrtf_args(smoothing="6", smoothing_window=window)
+        smooth_fn, _ = make_smoother(args)
+        freqs, mags = self._data(6)
+        np.testing.assert_allclose(
+            smooth_fn(freqs, mags, self.OUT),
+            fixed_smooth(freqs, mags, 6, self.OUT, window=window), atol=1e-12)
+
+    def test_gaussian_and_flat_differ(self, dfhrtf_args):
+        freqs, mags = self._data(7)
+        g, _ = make_smoother(dfhrtf_args(smoothing="12", smoothing_window="gaussian"))
+        f, _ = make_smoother(dfhrtf_args(smoothing="12", smoothing_window="flat"))
+        assert not np.allclose(g(freqs, mags, self.OUT), f(freqs, mags, self.OUT), atol=1e-6)
+
+    def test_bad_profile_string_raises(self, dfhrtf_args):
+        with pytest.raises(ValueError):
+            make_smoother(dfhrtf_args(smoothing="variable", var_smooth_profile="900:2,400:3"))
 
     def test_variable_mode_is_case_insensitive(self, dfhrtf_args):
         _, label = make_smoother(dfhrtf_args(smoothing="Variable"))
@@ -127,25 +163,38 @@ class TestMakeSmoother:
 
     @pytest.mark.parametrize("fraction", [3, 12, 48])
     def test_fixed_octave_dispatch(self, dfhrtf_args, fraction):
+        from core.smoothing import fixed_smooth
+
         args = dfhrtf_args(smoothing=str(fraction))
         smooth_fn, label = make_smoother(args)
         assert label == f"1/{fraction} Octave Smoothing"
 
-        freqs = _log_freqs(20.0, 20000.0, 400)
-        rng = np.random.default_rng(1)
-        mags = rng.normal(0.0, 2.0, freqs.size)
+        freqs, mags = self._data(1)
         np.testing.assert_allclose(
-            smooth_fn(freqs, mags), apply_smoothing(freqs, mags, fraction=fraction),
+            smooth_fn(freqs, mags, self.OUT),
+            fixed_smooth(freqs, mags, fraction, self.OUT,
+                         mean_mode=args.smoothing_mean_mode, window=args.smoothing_window),
             atol=1e-12,
         )
 
+    @pytest.mark.parametrize("mode", ["power", "db", "cubic"])
+    def test_mean_mode_applies_to_fixed_smoothing(self, dfhrtf_args, mode):
+        from core.smoothing import fixed_smooth
+
+        args = dfhrtf_args(smoothing="3", smoothing_mean_mode=mode)
+        smooth_fn, _ = make_smoother(args)
+        freqs, mags = self._data(4)
+        np.testing.assert_allclose(
+            smooth_fn(freqs, mags, self.OUT),
+            fixed_smooth(freqs, mags, 3, self.OUT, mean_mode=mode), atol=1e-12,
+        )
+
     def test_variable_and_fixed_produce_different_curves(self, dfhrtf_args):
-        freqs = _log_freqs(20.0, 20000.0, 400)
-        rng = np.random.default_rng(2)
-        mags = rng.normal(0.0, 2.0, freqs.size)
+        freqs, mags = self._data(2)
         var_fn, _ = make_smoother(dfhrtf_args(smoothing="variable"))
         fix_fn, _ = make_smoother(dfhrtf_args(smoothing="3"))
-        assert not np.allclose(var_fn(freqs, mags), fix_fn(freqs, mags), atol=1e-6)
+        assert not np.allclose(var_fn(freqs, mags, self.OUT),
+                               fix_fn(freqs, mags, self.OUT), atol=1e-6)
 
 
 class TestApplyLfExtension:

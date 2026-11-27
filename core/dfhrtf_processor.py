@@ -167,6 +167,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
 
         # Format tilt as one decimal place for use in filename templates
         tilt_str = f"{float(df_cfg.get('tilt', 0.0)):.1f}"
+        smoothing_str = str(df_cfg.get('smoothing', 'Variable')).replace('/', '-')
 
         # 2. Determine Input Files
         resolved_inputs = []  # (input_path, base_name, sr_label, src_dir)
@@ -237,6 +238,15 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         # 'Variable' -> 'variable'; '1/24' (or legacy 24) -> '24'
         smoothing_arg = 'variable' if smoothing_cfg.lower() == 'variable' else smoothing_cfg.split('/')[-1]
 
+        # Compact --var-smooth-profile string; the literal is the fallback when the
+        # settings carry no profile (keep in sync: test_variable_smoothing_four_way_sync).
+        from core.smoothing import format_profile, profile_from_dicts
+        profile_cfg = dfhrtf_adv.get('variable_smoothing_profile')
+        smoothing_profile_arg = (
+            "350:2,6000:12:0.88,14000:12,17500:4:1.6" if profile_cfg is None
+            else format_profile(profile_from_dicts(profile_cfg))
+        )
+
         common = {
             "avg_algo": df_cfg.get('per_sofa_avg_algo', 'Geo-Arc-Length'),
             "delimiter": delim,
@@ -256,12 +266,9 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             "grid_scale_low": float(dfhrtf_adv.get('weighted_grid_rel_low', 0.0)),
             "grid_scale_high": float(dfhrtf_adv.get('weighted_grid_rel_high', 2.0)),
             "preserve_lr_balance": bool(dfhrtf_adv.get('preserve_lr_balance', True)),
-            "var_smooth_freq_low": float(dfhrtf_adv.get('variable_smoothing_freq_low', 350.0)),
-            "var_smooth_freq_hi": float(dfhrtf_adv.get('variable_smoothing_freq_hi', 6000.0)),
-            "var_smooth_n_low": float(dfhrtf_adv.get('variable_smoothing_n_low', 2.0)),
-            "var_smooth_n_hi": float(dfhrtf_adv.get('variable_smoothing_n_hi', 12.0)),
-            "var_smooth_gamma": float(dfhrtf_adv.get('variable_smoothing_gamma', 0.88)),
-            "var_smooth_mean_mode": str(dfhrtf_adv.get('variable_smoothing_mean_mode', 'db')).lower(),
+            "var_smooth_profile": smoothing_profile_arg,
+            "smoothing_window": str(dfhrtf_adv.get('smoothing_window', 'gaussian')).lower(),
+            "smoothing_mean_mode": str(dfhrtf_adv.get('smoothing_mean_mode', 'power')).lower(),
         }
 
         # 3. Build Job List (sequential — no subprocesses, so groups/
@@ -283,7 +290,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             ext = f".{df_cfg.get('text_extension', 'txt')}"
             template = df_cfg.get('text_filename', "{filename}_{samplerate}_{LR}")
 
-            def get_text_path(lr_val, _base=base_name, _sr=sr_label, _ext=ext, _root=output_root, _tmpl=template, _folder=folder_name, _tilt=tilt_str):
+            def get_text_path(lr_val, _base=base_name, _sr=sr_label, _ext=ext, _root=output_root, _tmpl=template, _folder=folder_name, _tilt=tilt_str, _smooth=smoothing_str):
                 # {algo} is meaningless for per-SOFA outputs, so it is dropped
                 # along with an adjacent separator rather than substituted.
                 fname = render_filename(
@@ -293,6 +300,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                         "folder": _folder,
                         "samplerate": _sr,
                         "tilt": _tilt,
+                        "smoothing": _smooth,
                         "LR": lr_val,
                     },
                     ext=_ext,
@@ -321,7 +329,8 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 gname = render_filename(
                     graph_template,
                     {"filename": base_name, "folder": folder_name,
-                     "tilt": tilt_str, "graphtype": "df"},
+                     "tilt": tilt_str, "smoothing": smoothing_str,
+                     "graphtype": "df"},
                     ext=graph_ext,
                 )
                 job['graph_out'] = os.path.join(output_root, gname)
@@ -337,7 +346,8 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                     wname = render_filename(
                         graph_template,
                         {"filename": base_name, "folder": folder_name,
-                         "tilt": tilt_str, "graphtype": "weighted"},
+                         "tilt": tilt_str, "smoothing": smoothing_str,
+                         "graphtype": "weighted"},
                     )
 
                     # Fallback: if {graphtype} wasn't used in the template, append '_weighted'
@@ -448,7 +458,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                 log_callback(f"\n--- Post-Processing: {label} ({os.path.basename(out_dir) or out_dir}) ---")
                 os.makedirs(out_dir, exist_ok=True)
 
-                def get_avg_path(lr_val, _dir=out_dir, _tmpl=avg_template, _ext=ext, _algo=short_algo, _tilt=tilt_str, _folder=grp['folder']):
+                def get_avg_path(lr_val, _dir=out_dir, _tmpl=avg_template, _ext=ext, _algo=short_algo, _tilt=tilt_str, _smooth=smoothing_str, _folder=grp['folder']):
                     fname = render_filename(
                         _tmpl,
                         {
@@ -456,6 +466,7 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                             "folder": _folder,
                             "samplerate": "all",
                             "tilt": _tilt,
+                            "smoothing": _smooth,
                             "LR": lr_val,
                             "algo": _algo,
                         },
@@ -478,13 +489,15 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
                         gname = render_filename(
                             avg_graph_template,
                             {"folder": grp['folder'], "tilt": tilt_str,
-                             "graphtype": "df"},
+                             "smoothing": smoothing_str, "graphtype": "df"},
                             ext=gext,
                         )
                         freqs_l, db_l = res_l
                         _, db_r = res_r
                         plot_diffuse_field(freqs_l, db_l, db_r,
-                                           os.path.join(out_dir, gname), tilt_str)
+                                           os.path.join(out_dir, gname), tilt_str,
+                                           smoothing=smoothing_cfg,
+                                           smoothing_window=common["smoothing_window"])
                         log_callback(f" [+] Saved Average Graph: {gname}")
                     except Exception as e:
                         log_callback(f" [!] Average Graph Error: {str(e)}")

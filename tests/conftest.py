@@ -48,6 +48,13 @@ _MANIFEST_ONLY_KEYS = ("manifest",)
 # --------------------------------------------------------------------------- #
 # Argparse-derived defaults
 # --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _no_modal_popups(monkeypatch):
+    """The main window's one-time settings-migration dialog is modal; keep it
+    (and the immediate settings save that follows it) out of every test."""
+    monkeypatch.setenv("SOFA_BUDDY_NO_POPUPS", "1")
+
+
 @pytest.fixture(scope="session")
 def _sofa_arg_defaults():
     """Every generate_sofa.py CLI dest -> its argparse default."""

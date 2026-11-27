@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from PySide6.QtWidgets import QApplication, QSplashScreen
 from PySide6.QtGui import QPixmap, QFontDatabase
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 def _load_bundled_fonts():
     """Register every .ttf/.otf in ui/fonts/ with Qt's font database.
@@ -85,6 +85,10 @@ def main():
     # 3. Close splash and show main window
     splash.finish(window)
     window.show()
+
+    # One-time settings-migration notice: queued for when the event loop starts,
+    # so it appears above the visible main window, not behind the splash.
+    QTimer.singleShot(0, window.show_startup_notices)
 
     sys.exit(app.exec())
 

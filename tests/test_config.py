@@ -172,6 +172,56 @@ class TestValidation:
         assert cfg["dfhrtf"]["smoothing"] == "1/12"
         assert not any("smoothing" in w for w in warnings)
 
+    def test_retired_mean_mode_key_is_dropped_not_migrated(self):
+        cfg, warnings = self._merged_with_patch(
+            {"dfhrtf": {"advanced": {"variable_smoothing_mean_mode": "db"}}})
+        adv = cfg["dfhrtf"]["advanced"]
+        assert "variable_smoothing_mean_mode" not in adv
+        assert adv["smoothing_mean_mode"] == "power"    # factory default, not the old "db"
+        assert warnings == []
+
+    # variable_smoothing_profile (list of objects: custom validator)
+    def test_default_profile_is_valid_and_untouched(self):
+        cfg, warnings = self._merged_with_patch({})
+        assert cfg["dfhrtf"]["advanced"]["variable_smoothing_profile"] == \
+            C.load_defaults()["dfhrtf"]["advanced"]["variable_smoothing_profile"]
+        assert warnings == []
+
+    @pytest.mark.parametrize("bad", [
+        [],
+        "350:2",
+        [{"freq": 500.0, "n": 2.0}, {"freq": 500.0, "n": 4.0}],       # not increasing
+        [{"freq": 900.0, "n": 2.0}, {"freq": 500.0, "n": 4.0}],
+        [{"freq": 500.0, "n": 0.5}],                                   # n out of range
+        [{"freq": 500.0, "n": 60.0}],
+        [{"freq": 500.0, "n": 2.0}, {"freq": 900.0, "n": 4.0, "gamma": 20.0}],
+        [{"freq": 500.0, "n": 2.0}, {"freq": 900.0, "n": 4.0, "gamma": 0.01}],
+        [{"freq": 500.0, "n": 2.0, "gamma": 0.9}],                     # gamma on first point
+        [{"freq": 500.0, "n": 2.0, "colour": "red"}],                  # unknown key
+        [{"freq": 5.0, "n": 2.0}],                                     # freq out of range
+        [{"freq": 25000.0, "n": 2.0}],
+    ])
+    def test_invalid_profile_reverts_to_default_with_warning(self, bad):
+        cfg, warnings = self._merged_with_patch(
+            {"dfhrtf": {"advanced": {"variable_smoothing_profile": bad}}})
+        assert cfg["dfhrtf"]["advanced"]["variable_smoothing_profile"] == \
+            C.load_defaults()["dfhrtf"]["advanced"]["variable_smoothing_profile"]
+        assert any("variable_smoothing_profile" in w for w in warnings)
+
+    def test_valid_custom_profile_is_kept(self):
+        prof = [{"freq": 200, "n": 3}, {"freq": 4000.0, "n": 24.0, "gamma": 2.0}]
+        cfg, warnings = self._merged_with_patch(
+            {"dfhrtf": {"advanced": {"variable_smoothing_profile": prof}}})
+        assert cfg["dfhrtf"]["advanced"]["variable_smoothing_profile"] == [
+            {"freq": 200.0, "n": 3.0}, {"freq": 4000.0, "n": 24.0, "gamma": 2.0}]
+        assert warnings == []
+
+    def test_bad_smoothing_window_reverts(self):
+        cfg, warnings = self._merged_with_patch(
+            {"dfhrtf": {"advanced": {"smoothing_window": "triangular"}}})
+        assert cfg["dfhrtf"]["advanced"]["smoothing_window"] == "gaussian"
+        assert any("smoothing_window" in w for w in warnings)
+
     # Samplerate list filtering
     def test_samplerates_invalid_items_filtered(self):
         cfg, warnings = self._merged_with_patch({"sofa": {"samplerates": [48000, 99999]}})
@@ -224,7 +274,7 @@ class TestAtomicRoundTrip:
         assert reloaded["sofa"]["xover"] == pytest.approx(xover)
         assert reloaded["averaging"]["num_points"] == 256
         # schema_version must be written
-        assert reloaded["schema_version"] == 1
+        assert reloaded["schema_version"] == C.SCHEMA_VERSION == 2
 
     def test_files_never_written_to_disk(self, tmp_user_dir, monkeypatch):
         mgr = C.ConfigManager()
@@ -248,6 +298,332 @@ class TestAtomicRoundTrip:
         assert any("Could not read" in w for w in warnings)
         defaults = C.load_defaults()
         assert cfg["sofa"]["xover"] == pytest.approx(defaults["sofa"]["xover"])
+
+
+# ── 4b. Migration v1 -> v2 (variable-smoothing profile) ──────────────────────
+
+V1_DEFAULT_KEYS = {
+    "variable_smoothing_freq_low": 350.0, "variable_smoothing_freq_hi": 6000.0,
+    "variable_smoothing_n_low": 2.0, "variable_smoothing_n_hi": 12.0,
+    "variable_smoothing_gamma": 0.88,
+}
+OLD_KEYS = tuple(V1_DEFAULT_KEYS)
+
+
+def v1_user_file(tmp_user_dir, adv_overrides=None, dfhrtf_overrides=None, drop_old=False):
+    """Write a user_settings.json as v0.7.0 saved it (schema_version 1, five old keys,
+    old default templates)."""
+    adv = {} if drop_old else dict(V1_DEFAULT_KEYS)
+    adv["variable_smoothing_mean_mode"] = "db"          # also retired in v0.7.0 files
+    adv.update(adv_overrides or {})
+    dfhrtf = {"text_filename": "{filename} {LR}", "graph_filename": "{graphtype} {filename}",
+              "advanced": adv}
+    dfhrtf.update(dfhrtf_overrides or {})
+    return write_user(tmp_user_dir, {"schema_version": 1, "dfhrtf": dfhrtf})
+
+
+def pts(cfg):
+    return cfg["dfhrtf"]["advanced"]["variable_smoothing_profile"]
+
+
+class TestSmoothingMigration:
+    DEFAULT_PROFILE = C.load_defaults()["dfhrtf"]["advanced"]["variable_smoothing_profile"]
+
+    def test_untouched_user_gets_the_new_default_profile(self, tmp_user_dir):
+        notices = []
+        cfg, warnings = C.load_merged(v1_user_file(tmp_user_dir), notices)
+        assert pts(cfg) == self.DEFAULT_PROFILE
+        assert warnings == []
+        assert len(notices) == 1
+        assert "new default profile" in notices[0]
+        assert "Gaussian" in notices[0]
+        assert 'smoothing_window' in notices[0] and '"flat"' in notices[0]
+
+    def test_old_keys_retired_and_version_bumped(self, tmp_user_dir):
+        for overrides in ({}, {"variable_smoothing_n_hi": 24.0}):
+            cfg, _ = C.load_merged(v1_user_file(tmp_user_dir, overrides), [])
+            adv = cfg["dfhrtf"]["advanced"]
+            for k in OLD_KEYS + ("variable_smoothing_mean_mode",):
+                assert k not in adv
+            assert cfg["schema_version"] == 2
+            assert adv["smoothing_window"] == "gaussian"
+
+    def test_customised_user_keeps_their_curve_plus_do_nothing_points(self, tmp_user_dir):
+        path = v1_user_file(tmp_user_dir, {
+            "variable_smoothing_freq_low": 200.0, "variable_smoothing_freq_hi": 4000.0,
+            "variable_smoothing_n_low": 3.0, "variable_smoothing_n_hi": 20.0,
+            "variable_smoothing_gamma": 1.3})
+        notices = []
+        cfg, warnings = C.load_merged(path, notices)
+        assert pts(cfg) == [
+            {"freq": 200.0, "n": 3.0},
+            {"freq": 4000.0, "n": 20.0, "gamma": 1.3},
+            {"freq": 14000.0, "n": 20.0},
+            {"freq": 17500.0, "n": 20.0, "gamma": 1.6},
+        ]
+        assert warnings == []
+        assert len(notices) == 1
+        assert "previous Variable settings were kept" in notices[0]
+        assert "200:3,4000:20:1.3" in notices[0]
+        assert "Reset" in notices[0]
+
+    def test_customised_curve_is_numerically_identical_to_the_old_one(self, tmp_user_dir):
+        import numpy as np
+        from core.smoothing import SmoothingParams, profile_from_dicts, smoothing_profile
+        path = v1_user_file(tmp_user_dir, {
+            "variable_smoothing_freq_low": 200.0, "variable_smoothing_freq_hi": 4000.0,
+            "variable_smoothing_n_low": 3.0, "variable_smoothing_n_hi": 20.0,
+            "variable_smoothing_gamma": 1.3})
+        cfg, _ = C.load_merged(path, [])
+        new = SmoothingParams(points=profile_from_dicts(pts(cfg)))
+        old = SmoothingParams(points=((200.0, 3.0, 1.0), (4000.0, 20.0, 1.3)))
+        f = np.geomspace(20.0, 20000.0, 500)
+        # equal to rounding (above freq_hi the old form is w_lo + (w_hi - w_lo), 1 ulp off w_hi)
+        np.testing.assert_allclose(smoothing_profile(f, new), smoothing_profile(f, old),
+                                   rtol=1e-14, atol=0)
+
+    @pytest.mark.parametrize("freq_hi, expected_extra", [
+        (10000.0, [{"freq": 14000.0, "n": 20.0}, {"freq": 17500.0, "n": 20.0, "gamma": 1.6}]),
+        (14000.0, [{"freq": 17500.0, "n": 20.0}]),     # edge: freq_hi already >= 14000
+        (16000.0, [{"freq": 17500.0, "n": 20.0}]),
+        (17500.0, []),
+        (20000.0, []),
+    ])
+    def test_customised_freq_hi_edge_cases_only_add_points_above_it(
+            self, tmp_user_dir, freq_hi, expected_extra):
+        path = v1_user_file(tmp_user_dir, {"variable_smoothing_freq_hi": freq_hi,
+                                           "variable_smoothing_n_hi": 20.0})
+        notices = []
+        cfg, warnings = C.load_merged(path, notices)
+        got = pts(cfg)
+        assert got[:2] == [{"freq": 350.0, "n": 2.0},
+                           {"freq": freq_hi, "n": 20.0, "gamma": 0.88}]
+        assert got[2:] == expected_extra
+        assert warnings == []
+        assert len(notices) == 1
+
+    def test_unconvertible_old_values_fall_back_to_default_with_a_notice(self, tmp_user_dir):
+        # freq_low above freq_hi was accepted by the old degenerate-band code
+        path = v1_user_file(tmp_user_dir, {"variable_smoothing_freq_low": 1500.0,
+                                           "variable_smoothing_freq_hi": 800.0})
+        notices = []
+        cfg, _ = C.load_merged(path, notices)
+        assert pts(cfg) == self.DEFAULT_PROFILE
+        assert "could not be converted" in notices[0]
+
+    def test_v1_file_without_the_old_keys_is_treated_as_untouched(self, tmp_user_dir):
+        notices = []
+        cfg, _ = C.load_merged(v1_user_file(tmp_user_dir, drop_old=True), notices)
+        assert pts(cfg) == self.DEFAULT_PROFILE
+        assert len(notices) == 1
+
+    def test_old_default_templates_are_updated_and_mentioned(self, tmp_user_dir):
+        notices = []
+        cfg, _ = C.load_merged(v1_user_file(tmp_user_dir), notices)
+        d = C.load_defaults()["dfhrtf"]
+        assert cfg["dfhrtf"]["text_filename"] == d["text_filename"] == "{filename} {LR} {smoothing}"
+        assert cfg["dfhrtf"]["graph_filename"] == d["graph_filename"]
+        assert "{smoothing}" in notices[0]
+
+    def test_customised_templates_are_left_alone(self, tmp_user_dir):
+        path = v1_user_file(tmp_user_dir, dfhrtf_overrides={
+            "text_filename": "{filename} mine", "graph_filename": "{graphtype} {filename}"})
+        notices = []
+        cfg, _ = C.load_merged(path, notices)
+        assert cfg["dfhrtf"]["text_filename"] == "{filename} mine"
+        assert cfg["dfhrtf"]["graph_filename"] == C.load_defaults()["dfhrtf"]["graph_filename"]
+        assert "text_filename" not in notices[0]
+        assert "graph_filename" in notices[0]
+
+    def test_fresh_install_and_current_file_produce_no_notice(self, tmp_user_dir):
+        notices = []
+        C.load_merged(str(tmp_user_dir / "nope.json"), notices)
+        assert notices == []
+        notices = []
+        C.load_merged(write_user(tmp_user_dir, {"schema_version": 2}), notices)
+        assert notices == []
+
+    def test_manager_notices_then_save_then_second_load_is_silent(self, tmp_user_dir, monkeypatch):
+        path = v1_user_file(tmp_user_dir)
+        mgr = C.ConfigManager()
+        monkeypatch.setattr(mgr, "user_path", lambda: path)
+        cfg = mgr.load()
+        assert len(mgr.notices) == 1
+        mgr.save(cfg)
+        with open(path) as fh:
+            on_disk = json.load(fh)
+        assert on_disk["schema_version"] == 2
+        assert not any(k in on_disk["dfhrtf"]["advanced"] for k in OLD_KEYS)
+        assert on_disk["dfhrtf"]["advanced"]["variable_smoothing_profile"] == self.DEFAULT_PROFILE
+
+        mgr2 = C.ConfigManager()
+        monkeypatch.setattr(mgr2, "user_path", lambda: path)
+        mgr2.load()
+        assert mgr2.notices == []
+        assert mgr2.warnings == []
+
+    def test_reset_gives_the_real_default_profile_and_no_notice(self, tmp_user_dir, monkeypatch):
+        path = v1_user_file(tmp_user_dir, {"variable_smoothing_n_hi": 20.0})
+        mgr = C.ConfigManager()
+        monkeypatch.setattr(mgr, "user_path", lambda: path)
+        assert len(mgr.notices) == 1
+        cfg = mgr.reset()
+        assert pts(cfg) == self.DEFAULT_PROFILE
+        assert mgr.notices == []
+
+    def test_saved_snapshot_is_written_at_the_current_version(self, tmp_user_dir, monkeypatch):
+        mgr = C.ConfigManager()
+        path = str(tmp_user_dir / "user_settings.json")
+        monkeypatch.setattr(mgr, "user_path", lambda: path)
+        mgr.save(mgr.load())
+        with open(path) as fh:
+            assert json.load(fh)["schema_version"] == C.SCHEMA_VERSION
+
+
+class TestMigrationRobustness:
+    """Files v0.7.0 tolerated must never stop the app starting."""
+    DEFAULT_PROFILE = C.load_defaults()["dfhrtf"]["advanced"]["variable_smoothing_profile"]
+
+    @pytest.mark.parametrize("data", [
+        {"schema_version": "1", "dfhrtf": {"advanced": {"variable_smoothing_n_hi": 20.0}}},
+        {"schema_version": None},
+        {"schema_version": [1]},
+        {"schema_version": True},
+        {"schema_version": "banana"},
+        {"schema_version": 1, "dfhrtf": {"advanced": None}},
+        {"schema_version": 1, "dfhrtf": None},
+        {"schema_version": 1, "dfhrtf": "oops"},
+        {"schema_version": 1, "dfhrtf": {"advanced": {"variable_smoothing_n_hi": None,
+                                                       "variable_smoothing_gamma": "x"}}},
+    ])
+    def test_odd_files_load_and_end_up_at_the_current_version(self, tmp_user_dir, data):
+        notices = []
+        cfg, _ = C.load_merged(write_user(tmp_user_dir, data), notices)
+        assert cfg["schema_version"] == C.SCHEMA_VERSION
+        assert isinstance(cfg["dfhrtf"]["advanced"]["variable_smoothing_profile"], list)
+        assert cfg["dfhrtf"]["smoothing"]     # section intact
+        assert len(notices) == 1
+
+    def test_string_version_still_migrates_customised_keys(self, tmp_user_dir):
+        path = write_user(tmp_user_dir, {"schema_version": "1", "dfhrtf": {"advanced": {
+            "variable_smoothing_n_hi": 20.0}}})
+        cfg, _ = C.load_merged(path, [])
+        assert pts(cfg)[1] == {"freq": 6000.0, "n": 20.0, "gamma": 0.88}
+
+    def test_top_level_list_falls_back_to_defaults(self, tmp_user_dir):
+        path = str(tmp_user_dir / "user_settings.json")
+        with open(path, "w") as fh:
+            json.dump([1, 2, 3], fh)
+        cfg, warnings = C.load_merged(path, [])
+        assert any("Could not read" in w for w in warnings)
+        assert cfg["schema_version"] == C.SCHEMA_VERSION
+
+    def test_validate_never_raises_on_garbage(self):
+        for junk in ([], "x", None, 5):
+            cfg, warnings = C.validate(junk)
+            assert cfg["schema_version"] == C.SCHEMA_VERSION and warnings
+        cfg, _ = C.validate({"schema_version": 1, "dfhrtf": {"advanced": None}})
+        assert pts(cfg) == self.DEFAULT_PROFILE
+
+    def test_manager_load_falls_back_when_loading_explodes(self, tmp_user_dir, monkeypatch):
+        mgr = C.ConfigManager()
+        monkeypatch.setattr(mgr, "user_path", lambda: str(tmp_user_dir / "x.json"))
+        def boom(*a, **k):
+            raise RuntimeError("kaboom")
+        monkeypatch.setattr(C, "load_merged", boom)
+        cfg = mgr.load()
+        assert cfg["schema_version"] == C.SCHEMA_VERSION
+        assert any("kaboom" in w for w in mgr.warnings)
+        assert mgr.notices == []
+
+    # A user file without schema_version is the OLD format (the merge must not
+    # inherit the defaults' current version and skip the migration).
+    def test_missing_schema_version_migrates_with_notice(self, tmp_user_dir):
+        path = write_user(tmp_user_dir, {"dfhrtf": {"advanced": {
+            "variable_smoothing_freq_hi": 4000.0, "variable_smoothing_n_hi": 20.0}}})
+        notices = []
+        cfg, _ = C.load_merged(path, notices)
+        assert pts(cfg)[1] == {"freq": 4000.0, "n": 20.0, "gamma": 0.88}
+        assert len(notices) == 1 and "previous Variable settings were kept" in notices[0]
+        assert "variable_smoothing_n_hi" not in cfg["dfhrtf"]["advanced"]
+
+    @pytest.mark.parametrize("freq_hi, phrase", [
+        (10000.0, "Two extra points were added that hold the same"),
+        (16000.0, "One extra point was added that holds the same"),
+        (17500.0, "No extra points were needed."),
+    ])
+    def test_notice_grammar(self, tmp_user_dir, freq_hi, phrase):
+        path = v1_user_file(tmp_user_dir, {"variable_smoothing_freq_hi": freq_hi,
+                                           "variable_smoothing_n_hi": 20.0})
+        notices = []
+        C.load_merged(path, notices)
+        assert phrase in notices[0]
+        assert "needed that" not in notices[0]
+
+    def test_profile_rejects_strings_and_bools(self):
+        for bad in ([{"freq": "350", "n": 2.0}], [{"freq": 350.0, "n": True}],
+                    [{"freq": 350.0, "n": 2.0}, {"freq": 900.0, "n": 3.0, "gamma": "1"}]):
+            cfg, warnings = C.validate(C._deep_merge(
+                C.load_defaults(), {"dfhrtf": {"advanced": {"variable_smoothing_profile": bad}}}))
+            assert pts(cfg) == self.DEFAULT_PROFILE
+            assert any("variable_smoothing_profile" in w for w in warnings)
+
+
+@pytest.mark.usefixtures("qapp")
+class TestMainWindowSurvivesBadSettings:
+    @pytest.mark.parametrize("content", ['[1, 2]', '{"schema_version": 1, "dfhrtf": null}',
+                                         '{"schema_version": 1, "dfhrtf": {"advanced": null}}',
+                                         '{"schema_version": "1"}'])
+    def test_window_opens(self, tmp_user_dir, monkeypatch, content):
+        from ui.main_window import SofaBuddyMainWindow
+        path = str(tmp_user_dir / "user_settings.json")
+        with open(path, "w") as fh:
+            fh.write(content)
+        mgr = C.manager()
+        monkeypatch.setattr(mgr, "user_path", lambda: path)
+        window = SofaBuddyMainWindow()
+        assert window.tab_dfhrtf.get_config()["smoothing"] == "Variable"
+
+
+@pytest.mark.usefixtures("qapp")
+class TestMigrationPopup:
+    def test_popup_shows_once_then_saves(self, tmp_user_dir, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        from ui.main_window import SofaBuddyMainWindow
+
+        path = v1_user_file(tmp_user_dir)
+        mgr = C.manager()
+        monkeypatch.setattr(mgr, "user_path", lambda: path)
+        monkeypatch.delenv("SOFA_BUDDY_NO_POPUPS")
+        shown = []
+        monkeypatch.setattr(QMessageBox, "information",
+                            lambda parent, title, text: shown.append(text))
+        win = SofaBuddyMainWindow()
+        assert shown == []                        # nothing modal during construction (splash is up)
+        win.show_startup_notices()
+        assert len(shown) == 1 and "Smoothing settings updated" in shown[0]
+        win.show_startup_notices()                # runs once
+        assert len(shown) == 1
+        with open(path) as fh:
+            assert json.load(fh)["schema_version"] == 2
+
+        C._instance = None
+        mgr2 = C.manager()
+        monkeypatch.setattr(mgr2, "user_path", lambda: path)
+        SofaBuddyMainWindow().show_startup_notices()
+        assert len(shown) == 1                    # second launch: silent
+
+    def test_no_popup_on_a_fresh_install(self, tmp_user_dir, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+        from ui.main_window import SofaBuddyMainWindow
+
+        mgr = C.manager()
+        monkeypatch.setattr(mgr, "user_path", lambda: str(tmp_user_dir / "fresh.json"))
+        monkeypatch.delenv("SOFA_BUDDY_NO_POPUPS")
+        monkeypatch.setattr(QMessageBox, "information",
+                            lambda *a: pytest.fail("popup on a fresh install"))
+        SofaBuddyMainWindow().show_startup_notices()
+        assert not (tmp_user_dir / "fresh.json").exists()
 
 
 # ── 5. Reset ──────────────────────────────────────────────────────────────────

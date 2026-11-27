@@ -29,6 +29,21 @@ from pathlib import Path
 _DEFAULTS_PATH = Path(__file__).parent / "default_settings.json"
 _SCHEMA_PATH   = Path(__file__).parent / "default_settings.schema.json"
 
+# Keys removed from the settings; stale copies in a user's saved file are
+# dropped on load. NOT migrated: the replacement key keeps its factory default.
+_RETIRED_KEYS = (
+    "dfhrtf.advanced.variable_smoothing_mean_mode",  # now dfhrtf.advanced.smoothing_mean_mode
+    # Replaced by dfhrtf.advanced.variable_smoothing_profile. These DO hold tuned
+    # user values, so _migrate() converts them (schema v1 -> v2) before this drop.
+    "dfhrtf.advanced.variable_smoothing_freq_low",
+    "dfhrtf.advanced.variable_smoothing_freq_hi",
+    "dfhrtf.advanced.variable_smoothing_n_low",
+    "dfhrtf.advanced.variable_smoothing_n_hi",
+    "dfhrtf.advanced.variable_smoothing_gamma",
+)
+
+SCHEMA_VERSION = 2
+
 # ── JSON-schema bounds reader ─────────────────────────────────────────────────
 
 _schema_cache: dict | None = None
@@ -189,12 +204,12 @@ SCHEMA: dict[str, dict] = {
     "dfhrtf.advanced.weighted_grid_rel_high":      {"type": float, "min": 0.0, "max": 10.0},
     "dfhrtf.advanced.preserve_lr_balance":         {"type": bool},
 
-    "dfhrtf.advanced.variable_smoothing_freq_low":  {"type": float, "min": 20.0,  "max": 2000.0},
-    "dfhrtf.advanced.variable_smoothing_freq_hi":   {"type": float, "min": 500.0, "max": 20000.0},
-    "dfhrtf.advanced.variable_smoothing_n_low":     {"type": float, "min": 1.0,   "max": 48.0},
-    "dfhrtf.advanced.variable_smoothing_n_hi":      {"type": float, "min": 1.0,   "max": 48.0},
-    "dfhrtf.advanced.variable_smoothing_gamma":     {"type": float, "min": 0.1,   "max": 10.0},
-    "dfhrtf.advanced.variable_smoothing_mean_mode": {"type": str,   "choices": ["db", "cubic"]},
+    # A list of {freq, n, gamma?} objects: validated by _validate_smoothing_profile()
+    # (the generic machinery only handles lists of scalars), and described in the
+    # generated JSON schema by a hand-written fragment (generate_settings_schema.py).
+    "dfhrtf.advanced.variable_smoothing_profile":   {"type": list, "custom": "smoothing_profile"},
+    "dfhrtf.advanced.smoothing_window":             {"type": str,   "choices": ["gaussian", "flat"]},
+    "dfhrtf.advanced.smoothing_mean_mode":          {"type": str,   "choices": ["power", "db", "cubic"]},
 
     # -- averaging --
     "averaging.num_points":            {"type": int, "min": 64, "max": 4096},
@@ -225,6 +240,8 @@ def _deep_merge(base: dict, override: dict) -> dict:
     for key, val in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(val, dict):
             result[key] = _deep_merge(result[key], val)
+        elif key in result and isinstance(result[key], dict):
+            continue    # a non-object (null, number, ...) where a section belongs: keep the defaults
         else:
             result[key] = copy.deepcopy(val)
     return result
@@ -249,7 +266,7 @@ def _set_nested(cfg: dict, dotted_path: str, value) -> None:
     node[keys[-1]] = value
 
 
-def validate(cfg: dict) -> tuple:
+def validate(cfg: dict, notices: list | None = None) -> tuple:
     """
     Walk the SCHEMA against *cfg* (a deep copy is made internally) and:
       - coerce borderline numeric types where possible
@@ -257,17 +274,30 @@ def validate(cfg: dict) -> tuple:
       - revert invalid choices / un-coercible types to the default value
       - filter invalid items from list-with-choices fields
       - drop the 'files' key if present (never persisted)
+      - drop retired keys (see _RETIRED_KEYS)
 
-    Returns (sanitized_cfg, warnings) where warnings is a list[str].
+    Returns (sanitized_cfg, warnings) where warnings is a list[str].  If a
+    *notices* list is given, schema migrations append their user-facing messages
+    to it (see _migrate()).
     """
     defaults = load_defaults()
-    cfg = copy.deepcopy(cfg)
     warnings: list = []
+    if not isinstance(cfg, dict):
+        warnings.append("Config: settings were not a JSON object, using defaults.")
+        cfg = {}
+    cfg = copy.deepcopy(cfg)
 
-    # Schema-version migration (no-op at v1)
-    from_version = cfg.get("schema_version", 0)
-    if from_version != 1:
-        cfg = _migrate(cfg, from_version)
+    # Schema-version migration (v1 -> v2: variable-smoothing profile). Never
+    # raises: a file v0.7.0 tolerated must still start the app.
+    from_version = _coerce_version(cfg.get("schema_version"))
+    if from_version < SCHEMA_VERSION:
+        try:
+            cfg = _migrate(cfg, from_version, notices)
+        except Exception as exc:    # defensive: odd hand-edited values
+            warnings.append(f"Config: could not migrate old settings ({exc}).")
+            cfg["schema_version"] = SCHEMA_VERSION
+    else:
+        cfg["schema_version"] = from_version
 
     for path, spec in SCHEMA.items():
         value, found = _get_nested(cfg, path)
@@ -275,6 +305,18 @@ def validate(cfg: dict) -> tuple:
             continue  # Absent keys are fine — defaults already merged in
 
         default_val, _ = _get_nested(defaults, path)
+
+        if spec.get("custom") == "smoothing_profile":
+            from core.smoothing import profile_from_dicts, profile_to_dicts
+            try:
+                value = profile_to_dicts(profile_from_dicts(value))
+            except ValueError as exc:
+                warnings.append(
+                    f"Config: '{path}' is invalid ({exc}), reverted to default.")
+                value = copy.deepcopy(default_val)
+            _set_nested(cfg, path, value)
+            continue
+
         expected_type = spec.get("type")
         choices      = spec.get("choices")
         item_type    = spec.get("item_type")
@@ -358,36 +400,165 @@ def validate(cfg: dict) -> tuple:
     # Never persist the files list
     cfg.pop("files", None)
 
+    # Keys that no longer exist are dropped silently, not migrated.
+    for old_path in _RETIRED_KEYS:
+        *parents, leaf = old_path.split(".")
+        node, found = _get_nested(cfg, ".".join(parents))
+        if found and isinstance(node, dict):
+            node.pop(leaf, None)
+
     return cfg, warnings
 
 
-def _migrate(cfg: dict, from_version: int) -> dict:
-    """Stub for future schema migrations.  Currently a no-op for v0 → v1."""
-    # Example pattern for a future rename:
-    #   if from_version == 0:
-    #       old_val = cfg.get("dfhrtf", {}).pop("old_key", None)
-    #       if old_val is not None:
-    #           cfg.setdefault("dfhrtf", {})["new_key"] = old_val
-    cfg["schema_version"] = 1
+# v1 (v0.7.0) variable-smoothing keys and their factory values, for migration.
+_V1_VARIABLE_DEFAULTS = {
+    "freq_low": 350.0, "freq_hi": 6000.0, "n_low": 2.0, "n_hi": 12.0, "gamma": 0.88,
+}
+# v1 factory filename templates, replaced by ones containing {smoothing}.
+_V1_TEMPLATE_DEFAULTS = {
+    "text_filename": "{filename} {LR}",
+    "graph_filename": "{graphtype} {filename}",
+}
+# The new default profile's 14 kHz -> 17.5 kHz tail (gamma on the arrival point).
+_TAIL_POINTS = ((14000.0, 1.0), (17500.0, 1.6))
+
+
+def _coerce_version(value) -> int:
+    """schema_version as an int. A missing key or anything unusable (null, bool,
+    junk text, a list) means the old format, version 1."""
+    if isinstance(value, bool):
+        return 1
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value == int(value):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return 1
+    return 1
+
+
+def _migrate(cfg: dict, from_version: int, notices: list | None = None) -> dict:
+    """Bring a loaded config up to SCHEMA_VERSION.  Mutates and returns *cfg*.
+
+    v1 -> v2: the five variable_smoothing_{freq_low,freq_hi,n_low,n_hi,gamma}
+    keys become the variable_smoothing_profile point list, and the two old
+    default filename templates gain {smoothing}.  User-facing messages are
+    appended to *notices*. A file without a schema_version is the old format and
+    migrates like v1.
+    """
+    if from_version < 2:
+        _migrate_v1_to_v2(cfg, notices)
+    cfg["schema_version"] = SCHEMA_VERSION
     return cfg
 
 
-def load_merged(user_path=None) -> tuple:
+def _migrate_v1_to_v2(cfg: dict, notices: list | None) -> None:
+    from core.smoothing import (
+        format_profile, profile_from_dicts, profile_to_dicts,
+    )
+
+    defaults = load_defaults()
+    # Sections that aren't objects (null, a number, ...) count as absent.
+    if not isinstance(cfg.get("dfhrtf"), dict):
+        cfg["dfhrtf"] = copy.deepcopy(defaults["dfhrtf"])
+    dfhrtf = cfg["dfhrtf"]
+    if not isinstance(dfhrtf.get("advanced"), dict):
+        dfhrtf["advanced"] = copy.deepcopy(defaults["dfhrtf"]["advanced"])
+    adv = dfhrtf["advanced"]
+
+    # -- Variable-smoothing keys -> profile --
+    old_present = any(f"variable_smoothing_{k}" in adv for k in _V1_VARIABLE_DEFAULTS)
+    old = {}
+    for k, factory in _V1_VARIABLE_DEFAULTS.items():
+        try:
+            old[k] = float(adv.get(f"variable_smoothing_{k}", factory))
+        except (TypeError, ValueError):
+            old[k] = factory
+
+    default_profile = copy.deepcopy(defaults["dfhrtf"]["advanced"]["variable_smoothing_profile"])
+    detail = ""
+    if not old_present or old == _V1_VARIABLE_DEFAULTS:
+        adv["variable_smoothing_profile"] = default_profile
+        detail = ("Your Variable smoothing now uses the new default profile, which "
+                  "adds extra smoothing from 14 to 17.5 kHz.")
+    else:
+        pts = [{"freq": old["freq_low"], "n": old["n_low"]},
+               {"freq": old["freq_hi"], "n": old["n_hi"], "gamma": old["gamma"]}]
+        # Do-nothing points that repeat n_hi: same smoothing as before, but the
+        # list already has the new structure for the user to edit. Only points
+        # above freq_hi can be added (frequencies must increase).
+        for freq, gamma in _TAIL_POINTS:
+            if freq > old["freq_hi"]:
+                p = {"freq": freq, "n": old["n_hi"]}
+                if freq == _TAIL_POINTS[-1][0] and old["freq_hi"] < _TAIL_POINTS[0][0]:
+                    p["gamma"] = gamma
+                pts.append(p)
+        try:
+            adv["variable_smoothing_profile"] = profile_to_dicts(profile_from_dicts(pts))
+        except ValueError:
+            adv["variable_smoothing_profile"] = default_profile
+            detail = ("Your previous Variable settings could not be converted, so the "
+                      "new default profile is used (it adds extra smoothing from 14 to "
+                      "17.5 kHz).")
+        else:
+            kept = format_profile(profile_from_dicts(pts[:2]))
+            extra = len(pts) - 2
+            added = {0: "No extra points were needed.",
+                     1: "One extra point was added that holds the same smoothing "
+                        "width, so it doesn't change.",
+                     2: "Two extra points were added that hold the same smoothing "
+                        "width, so it doesn't change."}[extra]
+            detail = (f"Your previous Variable settings were kept ({kept}). {added} "
+                      "Reset settings to use the new default, which adds extra "
+                      "smoothing from 14 to 17.5 kHz.")
+    for k in _V1_VARIABLE_DEFAULTS:
+        adv.pop(f"variable_smoothing_{k}", None)
+
+    # -- Old default filename templates -> ones with {smoothing} --
+    updated = []
+    for key, old_tpl in _V1_TEMPLATE_DEFAULTS.items():
+        if dfhrtf.get(key) == old_tpl:
+            dfhrtf[key] = defaults["dfhrtf"][key]
+            updated.append(f"{key} -> \"{dfhrtf[key]}\"")
+
+    if notices is not None:
+        text = ("Smoothing settings updated.\n\n"
+                "SOFA Buddy now smooths with a Gaussian window, and Variable smoothing "
+                "is now a list of points (settings key "
+                "dfhrtf.advanced.variable_smoothing_profile).\n\n" + detail)
+        if updated:
+            text += ("\n\nYour default output filename templates now include "
+                     "{smoothing}: " + "; ".join(updated) + ".")
+        text += ("\n\nTo reproduce older output exactly, set "
+                 "dfhrtf.advanced.smoothing_window to \"flat\" in the settings file.")
+        notices.append(text)
+
+
+def load_merged(user_path=None, notices: list | None = None) -> tuple:
     """
     Load defaults and deep-merge the user file on top (if it exists). Qt-free.
-    Returns (merged_cfg, warnings).
+    Returns (merged_cfg, warnings).  Schema-migration messages for a user file
+    from an older version are appended to *notices* when a list is given.
     """
     cfg = load_defaults()
     if user_path and os.path.isfile(user_path):
         try:
             with open(user_path, "r", encoding="utf-8") as fh:
                 user_cfg = json.load(fh)
+            if not isinstance(user_cfg, dict):
+                raise ValueError("top level is not a JSON object")
             cfg = _deep_merge(cfg, user_cfg)
-        except (json.JSONDecodeError, OSError) as exc:
+            # The version comes from the USER file (not the merge, which would
+            # inherit the defaults' current one): a missing key is the old format.
+            cfg["schema_version"] = _coerce_version(user_cfg.get("schema_version"))
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
             return validate(cfg)[0], [
                 f"Config: Could not read user settings ({exc}), using defaults."
             ]
-    return validate(cfg)
+    return validate(cfg, notices)
 
 
 # ── ConfigManager (Qt-dependent) ─────────────────────────────────────────────
@@ -405,6 +576,7 @@ class ConfigManager:
     def __init__(self):
         self._cached: dict | None = None
         self._warnings: list = []
+        self._notices: list = []
 
     # -- Path resolution --
 
@@ -433,7 +605,13 @@ class ConfigManager:
         Call reset() to force a reload.
         """
         if self._cached is None:
-            self._cached, self._warnings = load_merged(self.user_path())
+            self._notices = []
+            try:
+                self._cached, self._warnings = load_merged(self.user_path(), self._notices)
+            except Exception as exc:    # never let settings stop the app starting
+                self._notices = []
+                self._cached, _ = validate(load_defaults())
+                self._warnings = [f"Config: could not load user settings ({exc}), using defaults."]
         return copy.deepcopy(self._cached)
 
     def get(self) -> dict:
@@ -446,6 +624,14 @@ class ConfigManager:
         self.load()  # ensure loaded
         return list(self._warnings)
 
+    @property
+    def notices(self) -> list:
+        """One-time user-facing messages from migrating an older settings file
+        (empty on a fresh install or an up-to-date file). Show them, then
+        save() so the file is current and they never repeat."""
+        self.load()
+        return list(self._notices)
+
     # -- Save --
 
     def save(self, cfg: dict) -> None:
@@ -457,7 +643,7 @@ class ConfigManager:
         to_save.pop("files", None)
 
         sanitized, _ = validate(to_save)
-        sanitized["schema_version"] = 1
+        sanitized["schema_version"] = SCHEMA_VERSION
 
         path = self.user_path()
         dir_ = os.path.dirname(path)
@@ -489,6 +675,7 @@ class ConfigManager:
             pass
         self._cached = None
         self._warnings = []
+        self._notices = []
         return self.load()
 
     # -- Snapshot helper --
@@ -512,7 +699,7 @@ class ConfigManager:
         result_dfhrtf.update(dfhrtf_live)
 
         return {
-            "schema_version": 1,
+            "schema_version": SCHEMA_VERSION,
             "output":   output_cfg,
             "sofa":     result_sofa,
             "dfhrtf":   result_dfhrtf,

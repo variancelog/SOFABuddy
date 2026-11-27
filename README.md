@@ -16,11 +16,11 @@ A desktop GUI for mastering SOFA HRTF files and extracting diffuse-field HRTF (D
 - **Parallel batch processing**: jobs are grouped into chunks and run concurrently through a bounded worker pool (default: half of CPU cores), with per-file progress and failure reporting; worker subprocesses run at reduced priority so the GUI stays responsive during full-core runs
 - **Multiple samplerates** in one run: 44.1 kHz, 48 kHz, 96 kHz
 - **Geometry-weighted diffuse-field calculation** using convex-hull solid-angle weights (accounts for hemispherical measurement grids missing lower elevations)
-- **Variable smoothing** (default): frequency-dependent Gaussian smoothing in log-frequency space, transitioning from 1-octave bandwidth at low frequencies to 1/12-octave at high frequencies (REW-psychoacoustic style); fixed 1/3–1/48-octave smoothing also available
+- **Variable smoothing** (default): frequency-dependent smoothing with a Gaussian window (or a flat one, by setting) on a log-frequency axis, defined by an editable list of points: by default 1/2 octave at low frequencies narrowing to 1/12 octave by 6 kHz, held to 14 kHz, then widening to 1/4 octave by 17.5 kHz; fixed 1/3–1/48-octave smoothing uses the same smoother, so wherever the Variable profile is held at 1/12 it is identical to fixed 1/12. Averaging is in power by default, and data above 20 kHz (the measurement's anti-alias roll-off) is left out of every window
 - **Three averaging algorithms** for global and per-SOFA averages: Arithmetic Mean, Geo-Arc-Length, and Soft-DTW barycenter
 - **Outlier exclusion** filters anomalous curves before averaging
 - **Grid visualization**: inspect measurement grids as 3D scatter plots; export solid-angle weight maps
-- **Flexible filename templates** with `{filename}`, `{folder}`, `{samplerate}`, `{eq}`, `{tilt}`, `{LR}`, `{graphtype}`, and `{algo}` variables
+- **Flexible filename templates** with `{filename}`, `{folder}`, `{samplerate}`, `{eq}`, `{tilt}`, `{smoothing}`, `{LR}`, `{graphtype}`, and `{algo}` variables
 - **Config persistence**: all settings auto-save and restore across sessions; Reset Settings returns to factory defaults
 - **Default and Custom output folder modes**
 
@@ -110,12 +110,25 @@ Controls DFHRTF extraction and averaging. Toggle **DFHRTF Outputs** on to enable
 
 | Setting | Description |
 |---|---|
-| Smoothing | **Variable** (default): frequency-dependent smoothing — heavy (1-octave) at low frequencies easing to light (1/12-octave) at high frequencies; or a fixed fraction: 1/3, 1/6, 1/12, 1/24, or 1/48 octave |
+| Smoothing | **Variable** (default): frequency-dependent smoothing — a window 1/2 octave wide at low frequencies easing to 1/12 octave in the mids, then heavier again to 1/4 octave in the top octave (see below); or a fixed 1/N-octave window: 1/3, 1/6, 1/12, 1/24, or 1/48. All smoothing uses the same method (see below) |
 | Tilt dB/Oct | Spectral tilt centered at 1 kHz (range −2 to +1 dB/oct) |
 | Extend LF | Linearize sub-crossover frequency response |
 | Crossover Hz | Transition frequency for LF extension (default 1000 Hz) |
 
-Variable smoothing's anchor frequencies, octave fractions, transition warp, and window-average mode are tunable in `user_settings.json` under the `dfhrtf.advanced.variable_smoothing_*` keys (defaults: 1/2 octave at/below 350 Hz → 1/12 octave at/above 6 kHz, gamma 0.88, dB-domain mean).
+Every smoothing mode (including the ±30° stereo graph) uses one smoother: a window of nominal width 1/N octave on a log-frequency axis, integrated exactly between FFT bins, so each octave inside the window counts equally. `dfhrtf.advanced.smoothing_window` picks the window shape: `gaussian` (default) or `flat` (rectangular). Both have the same variance, so 1/N means the same amount of smoothing in either; the Gaussian never inverts the peaks and dips of a ripple (a flat window does for ripple periods between half and one window width). Set `flat` to reproduce output from before the Gaussian was added. Only data up to 20 kHz is used; a window that reaches 20 kHz is cut there and renormalised, so the roll-off above 20 kHz never bleeds into the top of the band.
+
+Variable smoothing's width is a list of points in `user_settings.json`, `dfhrtf.advanced.variable_smoothing_profile`. Each point is `{"freq": Hz, "n": N}` (window 1/N octave wide) with an optional `"gamma"`. Below the first point the width is held at the first point's, above the last point at the last point's; between two points the width is interpolated over log-frequency, warped by t^gamma (1.0 = linear, below 1 moves the transition toward the earlier point, above 1 toward the later one). `gamma` belongs to the point a ramp arrives at, so it is not allowed on the first point. Two neighbouring points with the same `n` make a hold, and a single point is fixed 1/N. Frequencies must strictly increase (20–20000 Hz), `n` is 1–48, `gamma` 0.1–10. The default is a starting point:
+
+```json
+"variable_smoothing_profile": [
+  {"freq": 350,   "n": 2},
+  {"freq": 6000,  "n": 12, "gamma": 0.88},
+  {"freq": 14000, "n": 12},
+  {"freq": 17500, "n": 4,  "gamma": 1.6}
+]
+```
+
+That is 1/2 octave at/below 350 Hz easing to 1/12 octave by 6 kHz, held until 14 kHz, then heavier smoothing up to 1/4 octave at 17.5 kHz and above, which tames the unreliable top-octave detail. Settings from older versions are converted automatically on first launch (you get a one-time message). `dfhrtf.advanced.smoothing_mean_mode` sets how values inside a window are averaged for all modes: `power` (default, mean of 10^(dB/10)), `db` (mean of dB, favours nulls) or `cubic` (REW-style, favours peaks).
 
 **Post Processing — global averaging**
 
@@ -155,6 +168,7 @@ All filename fields support substitution variables enclosed in `{` `}`:
 | `{samplerate}` | Output samplerate (e.g. `48000`) | SOFA naming, DFHRTF text, per-SOFA average (global average: `all`) |
 | `{eq}` | EQ variant: `uneq` or `dfeq` | SOFA naming only |
 | `{tilt}` | Spectral tilt value in dB/oct (e.g. `0.0`, `-0.5`) | DFHRTF text, DFHRTF graphs, per-SOFA average, global average |
+| `{smoothing}` | Smoothing setting with `/` replaced by `-`: `Variable`, `1-3`, `1-6`, `1-12`, `1-24` or `1-48` | DFHRTF text, DFHRTF graphs, per-SOFA average, global average |
 | `{LR}` | Channel: `L` or `R`; `Avg` for the per-SOFA average | DFHRTF text, per-SOFA average, global-average text |
 | `{graphtype}` | Plot type: `df`, `stereo`, or `weighted` | DFHRTF graphs, global-average graph |
 | `{algo}` | Short algorithm name: `arithmean`, `geoarc`, `softdtw` | Global-average text files only |

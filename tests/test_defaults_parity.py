@@ -2,10 +2,13 @@
 
 Two distinct contracts live here:
 
-1. **The six variable-smoothing keys are contractually synced four ways** —
-   `SmoothingParams` dataclass defaults, `default_settings.json`, the
-   `--var-smooth-*` argparse defaults, and `core/dfhrtf_processor.py`'s
-   `.get(...)` fallbacks. A GUI run and a bare CLI run must smooth identically.
+1. **The variable-smoothing profile, the smoothing window and the averaging
+   domain are contractually synced four ways** — `SmoothingParams` dataclass
+   defaults, `default_settings.json`, the `--var-smooth-profile` /
+   `--smoothing-window` / `--smoothing-mean-mode` argparse defaults, and
+   `core/dfhrtf_processor.py`'s fallbacks. A GUI run and a bare CLI run must
+   smooth identically. (The profile is a list in the JSON and a compact string
+   on the CLI, so it is compared as the canonical string.)
 
 2. **Everything else may legitimately diverge.** The CLIs default independently
    of the GUI's factory settings (lowercase enum spellings, literal delimiters,
@@ -30,22 +33,16 @@ _REPO_ROOT = Path(__file__).parent.parent
 # --------------------------------------------------------------------------- #
 # 1. Variable smoothing: four-way sync
 # --------------------------------------------------------------------------- #
-# dataclass field  ->  key under dfhrtf.advanced  /  argparse dest
-_VAR_SMOOTH_KEYS = {
-    "freq_low":  ("variable_smoothing_freq_low",  "var_smooth_freq_low"),
-    "freq_hi":   ("variable_smoothing_freq_hi",   "var_smooth_freq_hi"),
-    "n_low":     ("variable_smoothing_n_low",     "var_smooth_n_low"),
-    "n_hi":      ("variable_smoothing_n_hi",      "var_smooth_n_hi"),
-    "gamma":     ("variable_smoothing_gamma",     "var_smooth_gamma"),
-    "mean_mode": ("variable_smoothing_mean_mode", "var_smooth_mean_mode"),
-}
-
+# What is synced: the width profile, the window and the averaging domain. Each
+# is compared across SmoothingParams, default_settings.json, the argparse
+# default and dfhrtf_processor's fallback, as a canonical profile string /
+# plain value.
 _PROCESSOR_PATH = _REPO_ROOT / "core" / "dfhrtf_processor.py"
 
 
 def _processor_fallbacks():
-    """Read `dfhrtf_adv.get('variable_smoothing_*', <literal>)` fallbacks out of
-    core/dfhrtf_processor.py.
+    """Read the `dfhrtf_adv.get(..., <literal>)` fallbacks (and the profile
+    fallback literal) out of core/dfhrtf_processor.py.
 
     A source scan rather than a call: the fallbacks live inside
     `process_dfhrtf_exports()`'s `common` dict, which cannot be built without a
@@ -54,52 +51,76 @@ def _processor_fallbacks():
     """
     src = _PROCESSOR_PATH.read_text(encoding="utf-8")
     found = {}
-    for json_key, _dest in _VAR_SMOOTH_KEYS.values():
+    for key in ("smoothing_window", "smoothing_mean_mode"):
         m = re.search(
-            r"dfhrtf_adv\.get\(\s*['\"]" + re.escape(json_key) + r"['\"]\s*,\s*([^)]+?)\s*\)",
-            src,
-        )
-        assert m, f"no fallback found for {json_key} in {_PROCESSOR_PATH.name}"
-        found[json_key] = eval(m.group(1), {"__builtins__": {}})  # a plain literal
+            r"dfhrtf_adv\.get\(\s*['\"]" + key + r"['\"]\s*,\s*([^)]+?)\s*\)", src)
+        assert m, f"no fallback found for {key} in {_PROCESSOR_PATH.name}"
+        found[key] = eval(m.group(1), {"__builtins__": {}})  # a plain literal
+    # The profile fallback is the string literal used when the settings have no
+    # profile: `"350:2,..." if profile_cfg is None else ...`.
+    m = re.search(r"['\"]([0-9.:,]+)['\"]\s+if\s+profile_cfg\s+is\s+None", src)
+    assert m, f"no profile fallback found in {_PROCESSOR_PATH.name}"
+    found["variable_smoothing_profile"] = m.group(1)
     return found
 
 
 def test_variable_smoothing_four_way_sync():
+    from core.smoothing import format_profile, parse_profile, profile_from_dicts
+
     params = SmoothingParams()
     json_adv = C.load_defaults()["dfhrtf"]["advanced"]
     from core.scripts.generate_dfhrtf import build_parser
     cli = vars(build_parser().parse_args([]))
     fallbacks = _processor_fallbacks()
 
-    mismatches = {}
-    for field, (json_key, dest) in _VAR_SMOOTH_KEYS.items():
-        sources = {
-            "SmoothingParams": getattr(params, field),
-            "default_settings.json": json_adv[json_key],
-            "argparse": cli[dest],
-            "dfhrtf_processor fallback": fallbacks[json_key],
-        }
-        if len(set(sources.values())) != 1:
-            mismatches[field] = sources
+    def canon(profile_str):
+        return format_profile(parse_profile(profile_str))
+
+    profile = {
+        "SmoothingParams": format_profile(params.points),
+        "default_settings.json": format_profile(
+            profile_from_dicts(json_adv["variable_smoothing_profile"])),
+        "argparse": canon(cli["var_smooth_profile"]),
+        "dfhrtf_processor fallback": canon(fallbacks["variable_smoothing_profile"]),
+    }
+    window = {
+        "SmoothingParams": params.window,
+        "default_settings.json": json_adv["smoothing_window"],
+        "argparse": cli["smoothing_window"],
+        "dfhrtf_processor fallback": fallbacks["smoothing_window"],
+    }
+    mean_mode = {
+        "SmoothingParams": params.mean_mode,
+        "default_settings.json": json_adv["smoothing_mean_mode"],
+        "argparse": cli["smoothing_mean_mode"],
+        "dfhrtf_processor fallback": fallbacks["smoothing_mean_mode"],
+    }
+    mismatches = {name: sources
+                  for name, sources in (("profile", profile), ("window", window),
+                                        ("mean_mode", mean_mode))
+                  if len(set(sources.values())) != 1}
 
     assert not mismatches, (
         "Variable-smoothing defaults are out of sync. All four must agree "
         "(core/smoothing.py SmoothingParams, core/default_settings.json, "
-        "generate_dfhrtf.py --var-smooth-* argparse defaults, "
-        f"core/dfhrtf_processor.py .get() fallbacks):\n{mismatches}"
+        "generate_dfhrtf.py --var-smooth-profile / --smoothing-window / "
+        "--smoothing-mean-mode argparse defaults, "
+        f"core/dfhrtf_processor.py fallbacks):\n{mismatches}"
     )
 
 
 def test_smoothing_keys_are_not_listed_as_intentional_divergences():
-    """The six smoothing keys are contractually synced — they must never be
-    parked in the intentional-divergence table."""
-    smoothing_dests = {dest for _json, dest in _VAR_SMOOTH_KEYS.values()}
-    listed = smoothing_dests & set(_KNOWN_INTENTIONAL_DIVERGENCES["dfhrtf"])
+    """The synced smoothing dests must never be parked in the
+    intentional-divergence table."""
+    listed = _SYNCED_SMOOTHING_DESTS & set(_KNOWN_INTENTIONAL_DIVERGENCES["dfhrtf"])
     assert not listed, (
         f"{sorted(listed)} are contractually synced (see "
         "test_variable_smoothing_four_way_sync) and must not be documented as "
         "intentional divergences."
     )
+
+
+_SYNCED_SMOOTHING_DESTS = {"var_smooth_profile", "smoothing_window", "smoothing_mean_mode"}
 
 
 # --------------------------------------------------------------------------- #
@@ -142,16 +163,12 @@ _DFHRTF_ARG_TO_JSON = {
     "grid_scale_low":         "dfhrtf.advanced.weighted_grid_rel_low",
     "grid_scale_high":        "dfhrtf.advanced.weighted_grid_rel_high",
     "preserve_lr_balance":    "dfhrtf.advanced.preserve_lr_balance",
-    "var_smooth_freq_low":    "dfhrtf.advanced.variable_smoothing_freq_low",
-    "var_smooth_freq_hi":     "dfhrtf.advanced.variable_smoothing_freq_hi",
-    "var_smooth_n_low":       "dfhrtf.advanced.variable_smoothing_n_low",
-    "var_smooth_n_hi":        "dfhrtf.advanced.variable_smoothing_n_hi",
-    "var_smooth_gamma":       "dfhrtf.advanced.variable_smoothing_gamma",
-    "var_smooth_mean_mode":   "dfhrtf.advanced.variable_smoothing_mean_mode",
+    "smoothing_window":       "dfhrtf.advanced.smoothing_window",
+    "smoothing_mean_mode":    "dfhrtf.advanced.smoothing_mean_mode",
 }
 
 # dest -> (cli_default, json_default, rationale)
-# The CLI defaults independently of the GUI's factory settings; only the six
+# The CLI defaults independently of the GUI's factory settings; only the
 # documented variable-smoothing keys are contractually synced.
 _KNOWN_INTENTIONAL_DIVERGENCES = {
     "sofa": {

@@ -1,3 +1,35 @@
+## Unreleased
+
+### Added
+- **Gaussian smoothing window**, the new default for every smoothing path (fixed 1/N, Variable, DFHRTF curves, the ±30° stereo curves). New setting `dfhrtf.advanced.smoothing_window`: `"gaussian"` (default) or `"flat"`; CLI `--smoothing-window`.
+  - Why: for ripple periods between w/2 and w, the flat window's gain goes negative, so those peaks and dips come out inverted. The Gaussian's gain is never negative.
+  - Its sigma is w/√12, the same variance as the flat window, so "1/N" means the same amount of smoothing in either window.
+  - It is clipped at 20 kHz and renormalised by the Gaussian mass left in band, so it does not droop at the top. That droop, and over-smoothing from a too-wide sigma, were the problems with the old v0.3.0 Gaussian.
+  - Every DFHRTF output changes slightly. Set `"flat"` to reproduce earlier output exactly: the flat window is bit-for-bit unchanged.
+  - Graph subtitles now name the window, e.g. "Variable (Gaussian)".
+- **Variable smoothing is now a list of points**, `dfhrtf.advanced.variable_smoothing_profile`, replacing the five `variable_smoothing_freq_low/_freq_hi/_n_low/_n_hi/_gamma` keys. CLI: `--var-smooth-profile "350:2,6000:12:0.88,14000:12,17500:4:1.6"`.
+  - Each point is `{freq, n, gamma?}`. The width 1/n is interpolated over log-frequency between points, warped by t^gamma, with `gamma` on the point a ramp arrives at. The width is held below the first point and above the last.
+  - Two neighbouring points with the same `n` make a hold; a single point is fixed 1/n.
+  - The new default keeps the old 350 Hz → 6 kHz ramp (1/2 → 1/12), holds 1/12 to 14 kHz, then ramps to 1/4 octave at 17.5 kHz (gamma 1.6) and holds that up to 20 kHz. This tames the unreliable detail in the top octave.
+- **`{smoothing}` filename variable** for DFHRTF outputs (text, graphs, per-SOFA average, global average). It is the Smoothing dropdown value with `/` replaced by `-`: `Variable`, `1-3` … `1-48`. The default text and graph templates now end in `{smoothing}` (`{filename} {LR} {smoothing}`, `{graphtype} {filename} {smoothing}`); the average templates are unchanged.
+- **Settings migration (schema version 2).** A settings file saved by v0.7.0 is converted on first launch:
+  - Untouched Variable settings become the new default profile.
+  - Customised Variable settings are kept, with "do nothing" points appended that repeat their `n_hi`, so the smoothing is unchanged. Reset settings gives the new default.
+  - Templates still on the old defaults (`{filename} {LR}`, `{graphtype} {filename}`) are updated to include `{smoothing}`; customised templates are left alone.
+  - A one-time message explains what changed. It appears after the loading screen closes, and the settings are saved right away so it doesn't show again. Fresh installs see no message.
+  - A malformed or hand-edited settings file no longer stops the app from starting; it falls back to defaults with a `[Config]` message.
+
+### Changed
+- **One smoothing method for everything** (fixed 1/N, Variable, DFHRTF curves and the ±30° stereo curves), integrated exactly between FFT bins on a log-frequency axis. Previously Variable used a Gaussian whose FWHM was 1/N, about 1.47 times smoother than a flat 1/N window, so Variable with n_hi=12 did not match fixed 1/12. Now a Variable profile with one N everywhere equals fixed 1/N, in either window.
+- Smoothing only uses data up to 20 kHz. A window that reaches 20 kHz is clipped there and renormalised (one-sided at the edge), so the anti-alias roll-off above 20 kHz no longer drags the top of the curve down. For HUTUBS at 19.9 kHz, 1/12 was 6.9 dB and Variable 9.7 dB below the unsmoothed level; both are now about 2 dB below. The curve is also evaluated directly at the output frequencies, instead of interpolated from smoothed FFT bins.
+- The default averaging domain inside a smoothing window is now power (mean of 10^(dB/10)); it used to be dB. Output curves change slightly, mostly around notches.
+- Settings: `dfhrtf.advanced.variable_smoothing_mean_mode` is replaced by `dfhrtf.advanced.smoothing_mean_mode` (`power` default, `db`, `cubic`), which now applies to fixed smoothing too. The CLI flag `--var-smooth-mean-mode` is now `--smoothing-mean-mode`. An old saved value is dropped, not carried over.
+- README and the Smoothing tooltip describe the windows, the profile, power averaging, the 20 kHz limit and the `{smoothing}` variable.
+
+### Removed
+- `apply_smoothing()`, `smooth_interp()` and `bracketing_bins()` in `generate_dfhrtf.py`, replaced by `core.smoothing.smooth_spectrum()` (with `fixed_smooth()` / `variable_smooth()` wrappers).
+- The `--var-smooth-freq-low/-freq-hi/-n-low/-n-hi/-gamma` CLI flags, replaced by `--var-smooth-profile`.
+
 ## v0.7.0 (2026-11-25)
 
 ### Added

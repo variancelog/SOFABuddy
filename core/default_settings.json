@@ -1,6 +1,6 @@
 {
   "$schema": "./default_settings.schema.json",
-  "schema_version": 1,
+  "schema_version": 2,
   "output": {
     "default": true,
     "folder": ""
@@ -36,14 +36,14 @@
     "per_sofa_avg": false,
     "per_sofa_avg_algo": "Geo-Arc-Length",
     "per_sofa_avg_filename": "{filename} avg LR",
-    "text_filename": "{filename} {LR}",
+    "text_filename": "{filename} {LR} {smoothing}",
     "text_delimiter": "Tab",
     "text_extension": "txt",
     "dfhrtf_graphs": true,
     "weighting_mode": "Auto",
     "weighted_grid": true,
     "weighted_grid_scope": "Per Folder",
-    "graph_filename": "{graphtype} {filename}",
+    "graph_filename": "{graphtype} {filename} {smoothing}",
     "graph_extension": "png",
     "smoothing": "Variable",
     "tilt": 0.0,
@@ -67,12 +67,14 @@
       "weighted_grid_rel_high": 2.0,
       "preserve_lr_balance": true,
 
-      "variable_smoothing_freq_low": 350.0,
-      "variable_smoothing_freq_hi": 6000.0,
-      "variable_smoothing_n_low": 2.0,
-      "variable_smoothing_n_hi": 12.0,
-      "variable_smoothing_gamma": 0.88,
-      "variable_smoothing_mean_mode": "db"
+      "variable_smoothing_profile": [
+        {"freq": 350.0,   "n": 2.0},
+        {"freq": 6000.0,  "n": 12.0, "gamma": 0.88},
+        {"freq": 14000.0, "n": 12.0},
+        {"freq": 17500.0, "n": 4.0,  "gamma": 1.6}
+      ],
+      "smoothing_window": "gaussian",
+      "smoothing_mean_mode": "power"
     }
   },
   "averaging": {

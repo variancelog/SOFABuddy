@@ -10,7 +10,6 @@ import pytest
 
 from core import dfhrtf_processor
 from core.scripts import generate_dfhrtf as gd
-from core.smoothing import SmoothingParams, variable_smooth
 from tests.test_processors import Recorder, make_config, spies, touch_inputs  # noqa: F401 (spies is a fixture)
 
 
@@ -128,40 +127,49 @@ class TestFastDiffuseField:
         assert checked
 
 
-class TestSubsetSmoothing:
+class TestSmoothingEvaluatedOnOutputGrid:
+    """Smoothing is evaluated directly at the output frequencies, never at every
+    FFT bin first (no needless work), and the result does not depend on which
+    other points are requested."""
+
     FREQS = np.fft.rfftfreq(4096, d=1 / 48000.0)
 
     def _mags(self):
         return np.random.default_rng(2).standard_normal(self.FREQS.size) * 3
 
-    @pytest.mark.parametrize("mode", ["db", "cubic"])
-    def test_variable_smooth_subset_equals_full(self, mode):
-        f = self.FREQS[1:]
-        m = self._mags()[1:]
-        p = SmoothingParams(mean_mode=mode)
-        idx = np.array([0, 3, 77, 500, f.size - 1])
-        assert np.array_equal(variable_smooth(f, m, p, indices=idx),
-                              variable_smooth(f, m, p)[idx])
-
+    @pytest.mark.parametrize("window", ["flat", "gaussian"])
     @pytest.mark.parametrize("smoothing", ["variable", "24", "3"])
-    def test_smooth_fn_subset_equals_full_including_dc_bin(self, smoothing):
+    def test_subset_evaluation_equals_full(self, smoothing, window):
         args = argparse_ns()
         args.smoothing = smoothing
-        fn, _ = gd.make_smoother(args)
-        m = self._mags()
-        idx = np.array([0, 1, 2, 40, 1000, self.FREQS.size - 1])
-        assert np.array_equal(fn(self.FREQS, m, idx), fn(self.FREQS, m)[idx])
-
-    @pytest.mark.parametrize("smoothing", ["variable", "24"])
-    def test_smooth_interp_equals_full_pipeline(self, smoothing):
-        args = argparse_ns()
-        args.smoothing = smoothing
+        args.smoothing_window = window
         fn, _ = gd.make_smoother(args)
         m = self._mags()
         target = gd.generate_fractional_octave_frequencies(20, 20000, fraction=48)
-        bins = gd.bracketing_bins(self.FREQS, target)
-        full = np.interp(target, self.FREQS, fn(self.FREQS, m))
-        assert np.array_equal(gd.smooth_interp(fn, self.FREQS, m, target, bins), full)
+        pick = np.array([0, 5, 100, 250, target.size - 1])
+        sub, full = fn(self.FREQS, m, target[pick]), fn(self.FREQS, m, target)[pick]
+        if window == "flat":
+            assert np.array_equal(sub, full)
+        else:       # Gaussian blocks visit different far-tail nodes: equal to ~1e-5 dB
+            np.testing.assert_allclose(sub, full, rtol=0, atol=1e-5)
+
+    def test_job_smooths_only_at_target_frequencies(self, tmp_path, monkeypatch, fake_input):
+        calls = []
+        real = gd.make_smoother
+
+        def spy_make(args):
+            fn, label = real(args)
+
+            def wrapped(freqs, mags, out_freqs):
+                calls.append(np.asarray(out_freqs).size)
+                return fn(freqs, mags, out_freqs)
+            return wrapped, label
+
+        monkeypatch.setattr(gd, "make_smoother", spy_make)
+        args = _args(tmp_path, text_out_l=str(tmp_path / "L.txt"), text_out_r=str(tmp_path / "R.txt"))
+        gd.run_dfhrtf(args)
+        target = gd.generate_fractional_octave_frequencies(20, 20000, fraction=args.output_octave_fraction)
+        assert calls == [target.size, target.size]      # once per ear, output grid only
 
 
 class TestProcessorDropsNoOutputJobs:

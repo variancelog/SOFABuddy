@@ -17,7 +17,8 @@ from pathlib import Path
 
 # Make `core` importable whether we're run as a module (-m) or a plain script.
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from core.config import SCHEMA
+from core.config import SCHEMA, SCHEMA_VERSION
+from core.smoothing import PROFILE_FREQ_RANGE, PROFILE_GAMMA_RANGE, PROFILE_N_RANGE
 
 _SCHEMA_OUT = Path(__file__).parent.parent / "default_settings.schema.json"
 
@@ -154,7 +155,7 @@ DESCRIPTIONS: dict[str, str] = {
     ),
     "dfhrtf.text_filename": (
         "Text output filename template. "
-        "Supported variables: {folder}, {filename}, {samplerate}, {tilt}, {LR}."
+        "Supported variables: {folder}, {filename}, {samplerate}, {tilt}, {smoothing}, {LR}."
     ),
     "dfhrtf.text_delimiter": (
         "Column delimiter written in DFHRTF text output files."
@@ -188,20 +189,22 @@ DESCRIPTIONS: dict[str, str] = {
     "dfhrtf.graph_filename": (
         "Graph output filename template. "
         "Supported variables: {folder}, {filename}, {samplerate}, {tilt}, "
-        "{graphtype}."
+        "{smoothing}, {graphtype}."
     ),
     "dfhrtf.graph_extension": (
         "Image format for graph output files."
     ),
     "dfhrtf.avg_graph_filename": (
         "Average DFHRTF graph filename template. Supported variables: "
-        "{folder}, {tilt}, {graphtype}."
+        "{folder}, {tilt}, {smoothing}, {graphtype}."
     ),
     "dfhrtf.smoothing": (
-        "Smoothing applied to the DFHRTF magnitude curve. 'Variable' uses "
-        "frequency-dependent Gaussian smoothing in log-frequency space, tunable "
-        "via the advanced.variable_smoothing_* keys; '1/N' applies a fixed "
-        "1/N-octave moving average."
+        "Smoothing applied to the DFHRTF magnitude curve, using a window on a "
+        "log-frequency axis (shape set by advanced.smoothing_window). 'Variable' "
+        "uses a frequency-dependent window width, tunable via "
+        "advanced.variable_smoothing_profile; '1/N' uses a fixed 1/N-octave "
+        "window. Data above 20 kHz is excluded from every window. The averaging "
+        "domain is set by advanced.smoothing_mean_mode."
     ),
     "dfhrtf.tilt": (
         "Spectral tilt applied to the DFHRTF output in dB/octave. Negative "
@@ -252,30 +255,29 @@ DESCRIPTIONS: dict[str, str] = {
         "Azimuth angle (degrees) used when extracting L/R off-axis curves for "
         "stereo graph outputs."
     ),
-    "dfhrtf.advanced.variable_smoothing_freq_low": (
-        "Variable smoothing: frequency (Hz) at/below which the bandwidth is "
-        "fixed at 1/n_low octave."
+    "dfhrtf.advanced.variable_smoothing_profile": (
+        "Variable smoothing width profile: a list of points {freq, n, gamma?}. "
+        "The smoothing window is 1/n octave wide. Below the first point the width "
+        "is held at the first point's 1/n, above the last point at the last "
+        "point's. Between two points the width is interpolated over log-frequency, "
+        "warped by t^gamma (1.0 = linear; <1 moves the transition toward the "
+        "earlier point, >1 toward the later one). 'gamma' belongs to the point a "
+        "ramp arrives at and is not allowed on the first point. Two neighbouring "
+        "points with the same n make a hold. One point is fixed 1/n smoothing. "
+        "Frequencies must strictly increase (20-20000 Hz), n is 1-48, gamma is "
+        "0.1-10."
     ),
-    "dfhrtf.advanced.variable_smoothing_freq_hi": (
-        "Variable smoothing: frequency (Hz) at/above which the bandwidth is "
-        "fixed at 1/n_hi octave."
+    "dfhrtf.advanced.smoothing_window": (
+        "Window shape used by all smoothing (fixed 1/N and variable). 'gaussian' "
+        "(default) has the same variance as 'flat', so 1/N means the same amount "
+        "of smoothing, but never inverts a ripple's peaks and dips. 'flat' is a "
+        "rectangular window; it reproduces output from before the Gaussian "
+        "window was added."
     ),
-    "dfhrtf.advanced.variable_smoothing_n_low": (
-        "Variable smoothing: octave-fraction denominator at freq_low "
-        "(1 = full octave, heavy smoothing)."
-    ),
-    "dfhrtf.advanced.variable_smoothing_n_hi": (
-        "Variable smoothing: octave-fraction denominator at freq_hi "
-        "(larger = lighter smoothing)."
-    ),
-    "dfhrtf.advanced.variable_smoothing_gamma": (
-        "Variable smoothing: warps the transition midpoint in log-frequency. "
-        "1.0 = linear; <1 shifts the transition toward freq_low, >1 toward "
-        "freq_hi."
-    ),
-    "dfhrtf.advanced.variable_smoothing_mean_mode": (
-        "Variable smoothing window average. 'db' averages in dB (geometric "
-        "mean of linear magnitude, favors nulls); 'cubic' uses REW's "
+    "dfhrtf.advanced.smoothing_mean_mode": (
+        "Window average used by all smoothing (fixed 1/N and variable). 'power' "
+        "averages 10^(dB/10) (energy mean, the default); 'db' averages in dB "
+        "(geometric mean of linear magnitude, favors nulls); 'cubic' uses REW's "
         "psychoacoustic cubic mean (favors peaks)."
     ),
 
@@ -348,8 +350,35 @@ _OBJECT_DESCRIPTIONS: dict[str, str] = {
 
 # ── Schema builder ────────────────────────────────────────────────────────────
 
+def _profile_schema() -> dict:
+    """Hand-written fragment for dfhrtf.advanced.variable_smoothing_profile: a
+    list of {freq, n, gamma?} objects (the generic SCHEMA machinery only covers
+    lists of scalars). Cross-point rules (strictly increasing freq, no gamma on
+    the first point) can't be expressed in draft-07 and are enforced by
+    core.config's custom validator."""
+    return {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["freq", "n"],
+            "properties": {
+                "freq": {"type": "number", "minimum": PROFILE_FREQ_RANGE[0],
+                         "maximum": PROFILE_FREQ_RANGE[1]},
+                "n": {"type": "number", "minimum": PROFILE_N_RANGE[0],
+                      "maximum": PROFILE_N_RANGE[1]},
+                "gamma": {"type": "number", "minimum": PROFILE_GAMMA_RANGE[0],
+                          "maximum": PROFILE_GAMMA_RANGE[1]},
+            },
+        },
+    }
+
+
 def _spec_to_prop(spec: dict) -> dict:
     """Convert a single SCHEMA spec dict to a JSON Schema property object."""
+    if spec.get("custom") == "smoothing_profile":
+        return _profile_schema()
     t = spec.get("type")
     choices = spec.get("choices")
     item_type = spec.get("item_type")
@@ -426,7 +455,7 @@ def build_schema() -> dict:
         "$schema": {"type": "string"},
         "schema_version": {
             "type": "integer",
-            "const": 1,
+            "const": SCHEMA_VERSION,
             "description": (
                 "Internal version identifier used by the migration path in "
                 "config.py. Do not change manually."

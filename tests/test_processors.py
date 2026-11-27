@@ -379,6 +379,56 @@ class TestDfhrtfInputResolution:
                    for j in jobs)
 
 
+    @pytest.mark.parametrize("dropdown,expected", [
+        ("Variable", "Variable"), ("1/3", "1-3"), ("1/6", "1-6"),
+        ("1/12", "1-12"), ("1/24", "1-24"), ("1/48", "1-48"),
+    ])
+    def test_smoothing_token_in_dfhrtf_output_names(self, spies, tmp_path,
+                                                    dropdown, expected):
+        files = touch_inputs(tmp_path, ["a.sofa"])
+        cfg = make_config(files, sofa_enabled=False)
+        cfg["dfhrtf"].update({
+            "smoothing": dropdown,
+            "text_filename": "{filename} {LR} {smoothing}",
+            "per_sofa_avg": True,
+            "per_sofa_avg_filename": "{filename} avg {smoothing}",
+            "dfhrtf_graphs": True,
+            "weighted_grid": True,
+            "graph_filename": "{graphtype} {filename} {smoothing}",
+        })
+        rec = Recorder()
+
+        assert dfhrtf_processor.process_dfhrtf_exports(cfg, **rec.kwargs) is True
+        job = spies["dfhrtf"].jobs[0]
+        names = {k: os.path.basename(job[k]) for k in
+                 ("text_out_l", "text_out_r", "text_out_avg",
+                  "graph_out", "graph_weighted_out")}
+        assert names["text_out_l"] == f"a L {expected}.txt"
+        assert names["text_out_r"] == f"a R {expected}.txt"
+        assert names["text_out_avg"] == f"a avg {expected}.txt"
+        assert names["graph_out"] == f"df a {expected}.png"
+        assert names["graph_weighted_out"] == f"weighted a {expected}.png"
+        assert not any("{" in n for n in names.values())
+
+    def test_global_average_names_carry_smoothing(self, spies, tmp_path, monkeypatch):
+        files = touch_inputs(tmp_path, ["a.sofa"])
+        cfg = make_config(files, sofa_enabled=False)
+        cfg["dfhrtf"].update({
+            "smoothing": "1/12", "avg_all": True, "dfhrtf_graphs": True,
+            "avg_filename": "{folder} avg {LR} {smoothing}",
+            "avg_graph_filename": "{folder} avg {smoothing}",
+        })
+        seen = []
+        monkeypatch.setattr(dfhrtf_processor, "run_averaging",
+                            lambda l, algo, ex, out, *a, **k: seen.append(out) or None)
+        rec = Recorder()
+
+        assert dfhrtf_processor.process_dfhrtf_exports(cfg, **rec.kwargs) is True
+        assert [os.path.basename(p) for p in seen] == [
+            f"{os.path.basename(tmp_path)} avg L 1-12.txt",
+            f"{os.path.basename(tmp_path)} avg R 1-12.txt"]
+
+
 # --------------------------------------------------------------------------- #
 # Plotting: no figure leaks (runs inside the worker thread)
 # --------------------------------------------------------------------------- #
@@ -400,3 +450,69 @@ def test_plot_diffuse_field_closes_its_figure(tmp_path):
 
     assert out.exists()
     assert plt.get_fignums() == []
+
+
+class TestSmoothingProfileHandoff:
+    """The settings' profile list reaches the backend as the compact
+    --var-smooth-profile string (via the manifest's common section)."""
+
+    def _common(self, spies, tmp_path, monkeypatch, advanced):
+        seen = {}
+        real = dfhrtf_processor.write_manifest
+
+        def spy(tmp_dir, common, jobs):
+            seen.update(common)
+            return real(tmp_dir, common, jobs)
+
+        monkeypatch.setattr(dfhrtf_processor, "write_manifest", spy)
+        files = touch_inputs(tmp_path, ["a.sofa"])
+        cfg = make_config(files, sofa_enabled=False)
+        cfg["dfhrtf"]["advanced"] = advanced
+        assert dfhrtf_processor.process_dfhrtf_exports(cfg, **Recorder().kwargs) is True
+        return seen
+
+    def test_profile_list_becomes_the_compact_string(self, spies, tmp_path, monkeypatch):
+        common = self._common(spies, tmp_path, monkeypatch, {
+            "variable_smoothing_profile": [
+                {"freq": 500.0, "n": 3.0}, {"freq": 5000.0, "n": 12.0, "gamma": 0.7},
+                {"freq": 12000.0, "n": 12.0}],
+            "smoothing_window": "flat",
+        })
+        assert common["var_smooth_profile"] == "500:3,5000:12:0.7,12000:12"
+        assert common["smoothing_window"] == "flat"
+
+    def test_missing_settings_fall_back_to_the_factory_values(self, spies, tmp_path, monkeypatch):
+        from core.smoothing import SmoothingParams, format_profile
+        common = self._common(spies, tmp_path, monkeypatch, {})
+        assert common["var_smooth_profile"] == format_profile(SmoothingParams().points)
+        assert common["smoothing_window"] == SmoothingParams().window
+
+
+@pytest.mark.parametrize("value, shown", [
+    ("Variable", "Variable"),   # GUI dropdown value
+    ("variable", "Variable"),   # backend CLI value
+    ("1/24", "1/24"),           # GUI dropdown value
+    ("24", "1/24"),             # backend CLI value
+])
+def test_graph_subtitle_names_smoothing_like_the_dropdown(value, shown):
+    from core.plotting import graph_subtitle
+
+    assert graph_subtitle(0.0, value) == f"Spectral Tilt: 0.0 dB/oct; Smoothing: {shown}"
+
+
+def test_graph_subtitle_without_smoothing_is_tilt_only():
+    from core.plotting import graph_subtitle
+
+    assert graph_subtitle("-1.0") == "Spectral Tilt: -1.0 dB/oct"
+
+
+@pytest.mark.parametrize("value, window, shown", [
+    ("Variable", "gaussian", "Variable (Gaussian)"),
+    ("variable", "flat", "Variable (Flat)"),
+    ("1/24", "gaussian", "1/24 (Gaussian)"),
+    ("24", "flat", "1/24 (Flat)"),
+])
+def test_graph_subtitle_names_the_window_when_given(value, window, shown):
+    from core.plotting import graph_subtitle
+
+    assert graph_subtitle(0.0, value, window) == f"Spectral Tilt: 0.0 dB/oct; Smoothing: {shown}"

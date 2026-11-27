@@ -21,7 +21,10 @@ from core.geometry_weights import (  # noqa: E402
 from core.sofa_io import read_sofa_robust  # noqa: E402
 from core.grid_info import grid_coverage  # noqa: E402
 from core.grid_plot import FIGSIZE, plot_weighted_grid  # noqa: E402
-from core.smoothing import SmoothingParams, variable_smooth  # noqa: E402
+from core.smoothing import (  # noqa: E402
+    BAND_LIMIT_HZ, SmoothingParams, fixed_smooth, parse_profile, variable_smooth,
+)
+from core.plotting import graph_subtitle  # noqa: E402
 
 
 # ================= HELPER FUNCTIONS =================
@@ -135,23 +138,6 @@ def diffuse_field_db(hrirs, weights, n_fft, method="auto"):
     return diffuse_field_db_direct(hrirs, weights, n_fft)
 
 
-def bracketing_bins(src_freqs, target_freqs):
-    """Indices of the source bins np.interp reads for each target frequency."""
-    j = np.searchsorted(src_freqs, target_freqs, side="right")
-    both = np.concatenate([j - 1, j])
-    return np.unique(np.clip(both, 0, len(src_freqs) - 1))
-
-
-def smooth_interp(smooth_fn, src_freqs, mags, target_freqs, bins):
-    """smooth_fn then np.interp onto target_freqs, smoothing only the needed bins.
-
-    Identical to np.interp(target_freqs, src_freqs, smooth_fn(src_freqs, mags))
-    because each smoothed point is independent and np.interp only reads the two
-    source points bracketing each target.
-    """
-    return np.interp(target_freqs, src_freqs[bins], smooth_fn(src_freqs, mags, bins))
-
-
 def find_closest_grid_point(source_pos, target_az, target_el):
     """Finds index of closest grid point using Cartesian Euclidean distance."""
     # target_cart will be shape (1, 3)
@@ -182,70 +168,29 @@ def apply_spectral_tilt(freqs, magnitude_db, slope_per_octave, ref_freq=1000.0):
     tilt_curve = num_octaves * slope_per_octave
     return magnitude_db + tilt_curve
 
-def apply_smoothing(freqs, mags, fraction=24, indices=None):
-    """Applies 1/fraction octave moving-average smoothing.
-
-    With `indices` (ascending `freqs` required), only those output points are
-    computed and the result has shape (len(indices),); values equal the full
-    result at those positions.
-    """
-    if indices is not None:
-        idx = np.asarray(indices, dtype=np.intp)
-        half = 2**(1/(2*fraction))
-        lo = np.searchsorted(freqs, freqs[idx] / half, side="left")
-        hi = np.searchsorted(freqs, freqs[idx] * half, side="right")
-        out = np.empty(idx.size, dtype=float)
-        for k in range(idx.size):
-            out[k] = np.mean(mags[lo[k]:hi[k]]) if hi[k] > lo[k] else mags[idx[k]]
-        return out
-    smoothed = np.zeros_like(mags)
-    for i, f in enumerate(freqs):
-        f_lower = f / (2**(1/(2*fraction)))
-        f_upper = f * (2**(1/(2*fraction)))
-        mask = (freqs >= f_lower) & (freqs <= f_upper)
-        if np.any(mask):
-            smoothed[i] = np.mean(mags[mask])
-        else:
-            smoothed[i] = mags[i]
-    return smoothed
-
 def make_smoother(args):
-    """Return a smooth_fn(freqs, mags_db) for the selected --smoothing mode.
+    """Return (smooth_fn(freqs, mags_db, out_freqs), label) for --smoothing.
 
-    'variable' uses core.smoothing.variable_smooth (frequency-dependent
-    bandwidth); any integer string uses the fixed 1/N-octave apply_smoothing.
+    Both modes go through core.smoothing.smooth_spectrum (--smoothing-window
+    shaped log-frequency window, band-limited to the output grid, averaged in
+    --smoothing-mean-mode): 'variable' uses the frequency-dependent width from
+    --var-smooth-profile; an integer string N uses a fixed 1/N-octave width.
+    smooth_fn evaluates the smoothed spectrum directly at out_freqs.
     """
+    mean_mode = args.smoothing_mean_mode
+    window = args.smoothing_window
     if str(args.smoothing).lower() == "variable":
         params = SmoothingParams(
-            freq_low=args.var_smooth_freq_low,
-            freq_hi=args.var_smooth_freq_hi,
-            n_low=args.var_smooth_n_low,
-            n_hi=args.var_smooth_n_hi,
-            gamma=args.var_smooth_gamma,
-            mean_mode=args.var_smooth_mean_mode,
+            points=parse_profile(args.var_smooth_profile),
+            mean_mode=mean_mode,
+            window=window,
         )
-
-        def smooth_fn(freqs, mags, indices=None):
-            # variable_smooth needs positive frequencies (log2 axis); the DC
-            # bin of an rfftfreq grid passes through unchanged.
-            out = np.array(mags, dtype=float, copy=True)
-            pos = freqs > 0
-            if indices is None:
-                out[pos] = variable_smooth(freqs[pos], out[pos], params)
-                return out
-            idx = np.asarray(indices, dtype=np.intp)
-            res = out[idx]
-            sel = pos[idx]
-            pos_rank = np.cumsum(pos) - 1       # position of each bin within freqs[pos]
-            res[sel] = variable_smooth(freqs[pos], out[pos], params,
-                                       indices=pos_rank[idx[sel]])
-            return res
-
-        return smooth_fn, "Variable Smoothing"
+        return (lambda freqs, mags, out_freqs: variable_smooth(freqs, mags, params, out_freqs),
+                "Variable Smoothing")
 
     fraction = int(args.smoothing)
-    return (lambda freqs, mags, indices=None: apply_smoothing(freqs, mags, fraction=fraction,
-                                                              indices=indices),
+    return (lambda freqs, mags, out_freqs: fixed_smooth(freqs, mags, fraction, out_freqs,
+                                                        mean_mode=mean_mode, window=window),
             f"1/{fraction} Octave Smoothing")
 
 def save_text_data(filename, freqs, mag, delimiter="\t"):
@@ -415,20 +360,20 @@ def build_parser():
     parser.add_argument("--stereo-angle",            type=float, default=30.0,
                         help="Azimuth angle (degrees) for stereo graph L/R measurement")
 
-    # Variable smoothing tunables (used when --smoothing variable)
-    parser.add_argument("--var-smooth-freq-low",  type=float, default=350.0,
-                        help="Frequency (Hz) at/below which smoothing is fixed at 1/n_low octave")
-    parser.add_argument("--var-smooth-freq-hi",   type=float, default=6000.0,
-                        help="Frequency (Hz) at/above which smoothing is fixed at 1/n_hi octave")
-    parser.add_argument("--var-smooth-n-low",     type=float, default=2.0,
-                        help="Octave-fraction denominator at freq_low (1 = full octave)")
-    parser.add_argument("--var-smooth-n-hi",      type=float, default=12.0,
-                        help="Octave-fraction denominator at freq_hi")
-    parser.add_argument("--var-smooth-gamma",     type=float, default=0.88,
-                        help="Warp of the transition midpoint (1.0 = linear in log-frequency)")
-    parser.add_argument("--var-smooth-mean-mode", choices=["db", "cubic"], default="db",
-                        help="Window average: 'db' (favors nulls) or 'cubic' REW-style (favors peaks)")
-    
+    parser.add_argument("--smoothing-mean-mode", choices=["power", "db", "cubic"], default="power",
+                        help="Window average for every smoothing mode: 'power' (mean of 10^(dB/10)), "
+                             "'db' (mean of dB, favors nulls) or 'cubic' REW-style (favors peaks)")
+
+    parser.add_argument("--smoothing-window", choices=["gaussian", "flat"], default="gaussian",
+                        help="Window shape for every smoothing mode: 'gaussian' (default) or 'flat' "
+                             "(rectangular; reproduces output from before the Gaussian was added)")
+
+    # Variable smoothing profile (used when --smoothing variable)
+    parser.add_argument("--var-smooth-profile", default="350:2,6000:12:0.88,14000:12,17500:4:1.6",
+                        help="Variable smoothing width profile as comma-separated freq:n[:gamma] "
+                             "points (freq Hz strictly increasing; window is 1/n octave; gamma warps "
+                             "the ramp arriving at that point, 1.0 = linear in log-frequency)")
+
     parser.add_argument("--weighting-mode", default="auto", choices=["auto", "geometric", "uniform"],
                         help="Grid weighting mode: auto (detect balanced grids), geometric, or uniform 1/N")
 
@@ -451,6 +396,11 @@ def main():
 
     if args.manifest:
         sys.exit(run_manifest(args.manifest))
+
+    try:
+        parse_profile(args.var_smooth_profile)
+    except ValueError as exc:
+        parser.error(f"--var-smooth-profile: {exc}")
 
     if not args.input:
         parser.error("--input is required unless --manifest is given")
@@ -501,10 +451,8 @@ def run_dfhrtf(args):
         fft_freqs = np.fft.rfftfreq(n_fft, d=1/fs)
 
         # 3. Interpolate & Smooth
-        target_freqs = generate_fractional_octave_frequencies(20, 20000,
+        target_freqs = generate_fractional_octave_frequencies(20, BAND_LIMIT_HZ,
                                                               fraction=args.output_octave_fraction)
-        # Only the FFT bins np.interp will read need smoothing.
-        bins = bracketing_bins(fft_freqs, target_freqs)
         idx_norm = (np.abs(target_freqs - norm_freq_hz)).argmin()
 
         smooth_fn, smoothing_label = make_smoother(args)
@@ -514,8 +462,8 @@ def run_dfhrtf(args):
         # FFT (Measurements, Receivers, Freqs) -> weighted power average, in dB
         avg_db = diffuse_field_db(hrirs, weights, n_fft)
 
-        val_l = smooth_interp(smooth_fn, fft_freqs, avg_db[0], target_freqs, bins)
-        val_r = smooth_interp(smooth_fn, fft_freqs, avg_db[1], target_freqs, bins)
+        val_l = smooth_fn(fft_freqs, avg_db[0], target_freqs)
+        val_r = smooth_fn(fft_freqs, avg_db[1], target_freqs)
 
         # 4. Normalize (0 dB at norm_freq_hz)
         # preserve_lr_balance: use a single shared mean reference so the real
@@ -582,7 +530,7 @@ def run_dfhrtf(args):
         plt.semilogx(target_freqs, val_l, label='Left Ear', linewidth=2, alpha=0.8)
         plt.semilogx(target_freqs, val_r, label='Right Ear', linewidth=2, alpha=0.8, linestyle='--')
 
-        title_str = f"Diffuse Field HRTF (Normalized)\nSpectral Tilt: {args.tilt} dB/oct"
+        title_str = f"Diffuse Field HRTF (Normalized)\n{graph_subtitle(args.tilt, args.smoothing, args.smoothing_window)}"
         plt.title(title_str)
         plt.xlabel("Frequency (Hz)")
         plt.ylabel("Magnitude (dB)")
@@ -613,11 +561,11 @@ def run_dfhrtf(args):
 
         # Process L Ear
         mag_30L = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30L, 0, :], n=n_fft)) + 1e-12)
-        val_30L = smooth_interp(smooth_fn, fft_freqs, mag_30L, target_freqs, bins)
+        val_30L = smooth_fn(fft_freqs, mag_30L, target_freqs)
 
         # Process R Ear
         mag_30R = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30R, 1, :], n=n_fft)) + 1e-12)
-        val_30R = smooth_interp(smooth_fn, fft_freqs, mag_30R, target_freqs, bins)
+        val_30R = smooth_fn(fft_freqs, mag_30R, target_freqs)
 
         # Normalize — shared reference preserves the stereo pair's ILD
         if args.preserve_lr_balance:
@@ -652,7 +600,7 @@ def run_dfhrtf(args):
         plt.semilogx(target_freqs, val_30L, label='Left Ear (+30°)', linewidth=2, alpha=0.8)
         plt.semilogx(target_freqs, val_30R, label='Right Ear (-30°)', linewidth=2, alpha=0.8, linestyle='--')
         
-        title_str = f"Stereo Response (+/-30°)\nSpectral Tilt: {args.tilt} dB/oct"
+        title_str = f"Stereo Response (+/-30°)\n{graph_subtitle(args.tilt, args.smoothing, args.smoothing_window)}"
         plt.title(title_str)
         plt.xlabel("Frequency (Hz)")
         plt.ylabel("Magnitude (dB)")
