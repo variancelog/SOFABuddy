@@ -202,9 +202,13 @@ DESCRIPTIONS: dict[str, str] = {
         "Smoothing applied to the DFHRTF magnitude curve, using a window on a "
         "log-frequency axis (shape set by advanced.smoothing_window). 'Variable' "
         "uses a frequency-dependent window width, tunable via "
-        "advanced.variable_smoothing_profile; '1/N' uses a fixed 1/N-octave "
-        "window. Data above 20 kHz is excluded from every window. The averaging "
-        "domain is set by advanced.smoothing_mean_mode."
+        "advanced.variable_smoothing_profile; 'Hybrid' is an adaptive smoother "
+        "that bridges narrow measurement ripple below a crossover and keeps real "
+        "narrow pinna peaks and notches above it (tuned by the advanced.hybrid_* "
+        "settings); '1/N' uses a fixed 1/N-octave window. Data above 20 kHz is "
+        "excluded from every window. The averaging domain is set by "
+        "advanced.smoothing_mean_mode. Tilt and LF extension are applied after "
+        "smoothing in every mode."
     ),
     "dfhrtf.tilt": (
         "Spectral tilt applied to the DFHRTF output in dB/octave. Negative "
@@ -279,6 +283,49 @@ DESCRIPTIONS: dict[str, str] = {
         "averages 10^(dB/10) (energy mean, the default); 'db' averages in dB "
         "(geometric mean of linear magnitude, favors nulls); 'cubic' uses REW's "
         "psychoacoustic cubic mean (favors peaks)."
+    ),
+    "dfhrtf.advanced.hybrid_xover_hz": (
+        "Hybrid smoothing: crossover frequency (Hz) between the low/mid regime "
+        "(ripple bridged by a weighted spline) and the high-frequency regime "
+        "(robust local cubic fit that keeps narrow pinna peaks and notches). "
+        "Unrelated to dfhrtf.xover, the LF-extension crossover. 5500-9000."
+    ),
+    "dfhrtf.advanced.hybrid_xover_width_oct": (
+        "Hybrid smoothing: width in octaves of the logistic crossfade around "
+        "hybrid_xover_hz. 0.01-0.5."
+    ),
+    "dfhrtf.advanced.hybrid_tv_weight": (
+        "Hybrid smoothing: total-variation denoising weight used to find narrow "
+        "low/mid ripple, which the spline then down-weights. 0.05-5."
+    ),
+    "dfhrtf.advanced.hybrid_s_factor": (
+        "Hybrid smoothing: how hard the low/mid spline smooths relative to a "
+        "curve's own noise. The spline's smoothness s is chosen per curve (each "
+        "ear separately) as s_factor x 479 x sigma^2, where sigma is the RMS "
+        "ripple the TV filter removes below hybrid_xover_hz, then limited to "
+        "hybrid_s_min..hybrid_s_max. Higher smooths more. 0.5-10."
+    ),
+    "dfhrtf.advanced.hybrid_s_min": (
+        "Hybrid smoothing: lower limit of the per-curve spline smoothness s "
+        "(used for clean curves). Must not exceed hybrid_s_max. 0.5-30."
+    ),
+    "dfhrtf.advanced.hybrid_s_max": (
+        "Hybrid smoothing: upper limit of the per-curve spline smoothness s "
+        "(used for noisy curves). Must not be below hybrid_s_min. 0.5-30."
+    ),
+    "dfhrtf.advanced.hybrid_huber_window": (
+        "Hybrid smoothing: odd window length, in 1/48-octave bins, of the "
+        "high-frequency local cubic fit. 9 is about 0.19 octave; larger tames "
+        "peaks above 15 kHz. 5-15."
+    ),
+    "dfhrtf.advanced.hybrid_huber_delta": (
+        "Hybrid smoothing: minimum residual (dB) the high-frequency fit "
+        "tolerates before treating a bin as an outlier. Lower rejects spikes "
+        "harder; higher approaches plain Savitzky-Golay smoothing. 0.05-0.30."
+    ),
+    "dfhrtf.advanced.hybrid_huber_iter": (
+        "Hybrid smoothing: reweighting iterations of the high-frequency robust "
+        "fit. 1-20."
     ),
 
     # averaging

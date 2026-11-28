@@ -74,7 +74,17 @@
         {"freq": 17500.0, "n": 4.0,  "gamma": 1.6}
       ],
       "smoothing_window": "gaussian",
-      "smoothing_mean_mode": "power"
+      "smoothing_mean_mode": "power",
+
+      "hybrid_xover_hz": 7350.0,
+      "hybrid_xover_width_oct": 0.08,
+      "hybrid_tv_weight": 0.65,
+      "hybrid_s_factor": 3.0,
+      "hybrid_s_min": 4.0,
+      "hybrid_s_max": 12.0,
+      "hybrid_huber_window": 9,
+      "hybrid_huber_delta": 0.12,
+      "hybrid_huber_iter": 6
     }
   },
   "averaging": {

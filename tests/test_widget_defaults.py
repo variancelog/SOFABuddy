@@ -74,6 +74,15 @@ def test_dfhrtf_tab_construction_defaults_match_factory_json(qtbot):
 # --------------------------------------------------------------------------- #
 # set_config() fallbacks
 # --------------------------------------------------------------------------- #
+def test_dfhrtf_smoothing_dropdown_offers_and_round_trips_hybrid(qtbot):
+    tab = DfhrtfTab()
+    qtbot.addWidget(tab)
+    tab.set_config({"smoothing": "Hybrid"})
+    assert tab.get_config()["smoothing"] == "Hybrid"
+    tab.set_config({})
+    assert tab.get_config()["smoothing"] == _factory("dfhrtf")["smoothing"]
+
+
 def test_sofa_set_config_fallbacks_are_factory_values(qtbot):
     tab = SofaTab()
     qtbot.addWidget(tab)

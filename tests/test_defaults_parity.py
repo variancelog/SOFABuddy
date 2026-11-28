@@ -7,7 +7,8 @@ Two distinct contracts live here:
    defaults, `default_settings.json`, the `--var-smooth-profile` /
    `--smoothing-window` / `--smoothing-mean-mode` argparse defaults, and
    `core/dfhrtf_processor.py`'s fallbacks. A GUI run and a bare CLI run must
-   smooth identically. (The profile is a list in the JSON and a compact string
+   smooth identically. The nine Hybrid-smoothing parameters (`hybrid_*`) are
+   synced the same way (test_hybrid_smoothing_four_way_sync). (The profile is a list in the JSON and a compact string
    on the CLI, so it is compared as the canonical string.)
 
 2. **Everything else may legitimately diverge.** The CLIs default independently
@@ -24,6 +25,7 @@ from pathlib import Path
 import pytest
 
 import core.config as C
+from core.hybrid_smoothing import HybridParams
 from core.smoothing import SmoothingParams
 
 
@@ -38,6 +40,10 @@ _REPO_ROOT = Path(__file__).parent.parent
 # default and dfhrtf_processor's fallback, as a canonical profile string /
 # plain value.
 _PROCESSOR_PATH = _REPO_ROOT / "core" / "dfhrtf_processor.py"
+
+
+_HYBRID_KEYS = ("xover_hz", "xover_width_oct", "tv_weight", "s_factor", "s_min", "s_max",
+                "huber_window", "huber_delta", "huber_iter")
 
 
 def _processor_fallbacks():
@@ -61,6 +67,12 @@ def _processor_fallbacks():
     m = re.search(r"['\"]([0-9.:,]+)['\"]\s+if\s+profile_cfg\s+is\s+None", src)
     assert m, f"no profile fallback found in {_PROCESSOR_PATH.name}"
     found["variable_smoothing_profile"] = m.group(1)
+    for key in _HYBRID_KEYS:
+        name = "hybrid_" + key
+        m = re.search(
+            r"dfhrtf_adv\.get\(\s*['\"]" + name + r"['\"]\s*,\s*([^)]+?)\s*\)", src)
+        assert m, f"no fallback found for {name} in {_PROCESSOR_PATH.name}"
+        found[name] = eval(m.group(1), {"__builtins__": {}})
     return found
 
 
@@ -109,6 +121,34 @@ def test_variable_smoothing_four_way_sync():
     )
 
 
+def test_hybrid_smoothing_four_way_sync():
+    """Hybrid parameters: HybridParams, default_settings.json, the --hybrid-*
+    argparse defaults and dfhrtf_processor's fallbacks must all agree."""
+    params = HybridParams()
+    json_adv = C.load_defaults()["dfhrtf"]["advanced"]
+    from core.scripts.generate_dfhrtf import build_parser
+    cli = vars(build_parser().parse_args([]))
+    fallbacks = _processor_fallbacks()
+
+    mismatches = {}
+    for key in _HYBRID_KEYS:
+        name = "hybrid_" + key
+        sources = {
+            "HybridParams": getattr(params, key),
+            "default_settings.json": json_adv[name],
+            "argparse": cli[name],
+            "dfhrtf_processor fallback": fallbacks[name],
+        }
+        if len(set(sources.values())) != 1:
+            mismatches[name] = sources
+    assert not mismatches, (
+        "Hybrid-smoothing defaults are out of sync. All four must agree "
+        "(core/hybrid_smoothing.py HybridParams, core/default_settings.json, "
+        "generate_dfhrtf.py --hybrid-* argparse defaults, "
+        f"core/dfhrtf_processor.py fallbacks):\n{mismatches}"
+    )
+
+
 def test_smoothing_keys_are_not_listed_as_intentional_divergences():
     """The synced smoothing dests must never be parked in the
     intentional-divergence table."""
@@ -120,7 +160,8 @@ def test_smoothing_keys_are_not_listed_as_intentional_divergences():
     )
 
 
-_SYNCED_SMOOTHING_DESTS = {"var_smooth_profile", "smoothing_window", "smoothing_mean_mode"}
+_SYNCED_SMOOTHING_DESTS = {"var_smooth_profile", "smoothing_window", "smoothing_mean_mode",
+                           *("hybrid_" + k for k in _HYBRID_KEYS)}
 
 
 # --------------------------------------------------------------------------- #
@@ -165,6 +206,7 @@ _DFHRTF_ARG_TO_JSON = {
     "preserve_lr_balance":    "dfhrtf.advanced.preserve_lr_balance",
     "smoothing_window":       "dfhrtf.advanced.smoothing_window",
     "smoothing_mean_mode":    "dfhrtf.advanced.smoothing_mean_mode",
+    **{"hybrid_" + k: "dfhrtf.advanced.hybrid_" + k for k in _HYBRID_KEYS},
 }
 
 # dest -> (cli_default, json_default, rationale)

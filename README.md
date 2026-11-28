@@ -17,6 +17,7 @@ A desktop GUI for mastering SOFA HRTF files and extracting diffuse-field HRTF (D
 - **Multiple samplerates** in one run: 44.1 kHz, 48 kHz, 96 kHz
 - **Geometry-weighted diffuse-field calculation** using convex-hull solid-angle weights (accounts for hemispherical measurement grids missing lower elevations)
 - **Variable smoothing** (default): frequency-dependent smoothing with a Gaussian window (or a flat one, by setting) on a log-frequency axis, defined by an editable list of points: by default 1/2 octave at low frequencies narrowing to 1/12 octave by 6 kHz, held to 14 kHz, then widening to 1/4 octave by 17.5 kHz; fixed 1/3–1/48-octave smoothing uses the same smoother, so wherever the Variable profile is held at 1/12 it is identical to fixed 1/12. Averaging is in power by default, and data above 20 kHz (the measurement's anti-alias roll-off) is left out of every window
+- **Hybrid smoothing** (optional): an adaptive smoother that bridges narrow measurement ripple below about 7 kHz while keeping the narrow peaks and notches above it that come from the pinna, and rejects single-bin glitches (see below)
 - **Three averaging algorithms** for global and per-SOFA averages: Arithmetic Mean, Geo-Arc-Length, and Soft-DTW barycenter
 - **Outlier exclusion** filters anomalous curves before averaging
 - **Grid visualization**: inspect measurement grids as 3D scatter plots; export solid-angle weight maps
@@ -110,7 +111,7 @@ Controls DFHRTF extraction and averaging. Toggle **DFHRTF Outputs** on to enable
 
 | Setting | Description |
 |---|---|
-| Smoothing | **Variable** (default): frequency-dependent smoothing — a window 1/2 octave wide at low frequencies easing to 1/12 octave in the mids, then heavier again to 1/4 octave in the top octave (see below); or a fixed 1/N-octave window: 1/3, 1/6, 1/12, 1/24, or 1/48. All smoothing uses the same method (see below) |
+| Smoothing | **Variable** (default): frequency-dependent smoothing — a window 1/2 octave wide at low frequencies easing to 1/12 octave in the mids, then heavier again to 1/4 octave in the top octave (see below); **Hybrid**: adaptive smoothing that keeps real narrow pinna peaks and notches above about 7 kHz (see below); or a fixed 1/N-octave window: 1/3, 1/6, 1/12, 1/24, or 1/48. Variable and fixed smoothing use the same method (see below) |
 | Tilt dB/Oct | Spectral tilt centered at 1 kHz (range −2 to +1 dB/oct) |
 | Extend LF | Linearize sub-crossover frequency response |
 | Crossover Hz | Transition frequency for LF extension (default 1000 Hz) |
@@ -129,6 +130,15 @@ Variable smoothing's width is a list of points in `user_settings.json`, `dfhrtf.
 ```
 
 That is 1/2 octave at/below 350 Hz easing to 1/12 octave by 6 kHz, held until 14 kHz, then heavier smoothing up to 1/4 octave at 17.5 kHz and above, which tames the unreliable top-octave detail. Settings from older versions are converted automatically on first launch (you get a one-time message). `dfhrtf.advanced.smoothing_mean_mode` sets how values inside a window are averaged for all modes: `power` (default, mean of 10^(dB/10)), `db` (mean of dB, favours nulls) or `cubic` (REW-style, favours peaks).
+
+**Hybrid smoothing** is meant for 1/48-octave DFHRTF curves. The raw spectrum is first smoothed to the 1/48-octave grid (using `smoothing_window` and `smoothing_mean_mode` as above), then two regimes are applied and joined by a logistic crossfade in log-frequency:
+
+- below the crossover (7350 Hz by default), narrow dips are treated as measurement artefacts (rig reflections, concha jitter): a smoothing spline bridges them, with weights reduced wherever a total-variation denoiser sees ripple;
+- above it, narrow peaks and deep notches are real pinna cues: a Huber-reweighted local cubic fit (9 bins, about 0.19 octave) throws out 1-2 bin spikes such as the 14.69 kHz glitch in some HUTUBS files, while multi-bin notches and peaks keep their depth. A notch narrower than about 3 bins is treated as a glitch.
+
+Nine JSON-only settings tune it, all under `dfhrtf.advanced`: `hybrid_xover_hz` (7350, range 5500–9000; unrelated to the LF-extension crossover `dfhrtf.xover`), `hybrid_xover_width_oct` (0.08), `hybrid_tv_weight` (0.65), `hybrid_s_factor` (3.0, range 0.5–10), `hybrid_s_min` (4.0) and `hybrid_s_max` (12.0) (both 0.5–30, min must not exceed max; see below), `hybrid_huber_window` (9; odd, 5–15), `hybrid_huber_delta` (0.12 dB, range 0.05–0.30: lower rejects spikes harder, higher approaches plain Savitzky-Golay smoothing) and `hybrid_huber_iter` (6). Notes: spectral tilt and LF extension are applied after smoothing, as in every mode; and the spline weight boost above the crossover follows `hybrid_xover_hz` (the original algorithm hard-coded 7500 Hz, so with the default 7350 Hz the boost starts one or two bins earlier than in the version it was first validated on; because the spline's budget is shared across the curve, this moves the result by up to about 0.3 dB in places).
+
+How hard the low/mid spline smooths (its smoothness `s`) is chosen separately for every curve, so the left and right ears, which on measured datasets can differ a lot, each get their own value. The spline's `s` is a budget for the whole curve: a noisy measurement (the ARI datasets, for example) spends a fixed budget on broad noise and keeps its narrow ripple, while a budget big enough for those over-smooths clean curves (HUTUBS, COAT) and erases real detail such as small shoulders. So the app measures each curve's noise (the RMS of the ripple the total-variation denoiser removes below the crossover, `sigma`) and sets `s = hybrid_s_factor x 479 x sigma^2`, limited to between `hybrid_s_min` and `hybrid_s_max`: clean curves get about 4, noisy ones up to 12. Raise `hybrid_s_factor` to smooth more everywhere, or set `hybrid_s_min` equal to `hybrid_s_max` to force one fixed `s`. The values used are printed in the job log (`-> Hybrid s: L 9.4, R 9.0`) and shown in the graph subtitle (`Smoothing: Hybrid (s L 9.4, R 9.0)`) of the diffuse-field and ±30° stereo graphs; averaged graphs, built from many already-smoothed curves, just say `Hybrid`.
 
 **Post Processing — global averaging**
 
@@ -168,7 +178,7 @@ All filename fields support substitution variables enclosed in `{` `}`:
 | `{samplerate}` | Output samplerate (e.g. `48000`) | SOFA naming, DFHRTF text, per-SOFA average (global average: `all`) |
 | `{eq}` | EQ variant: `uneq` or `dfeq` | SOFA naming only |
 | `{tilt}` | Spectral tilt value in dB/oct (e.g. `0.0`, `-0.5`) | DFHRTF text, DFHRTF graphs, per-SOFA average, global average |
-| `{smoothing}` | Smoothing setting with `/` replaced by `-`: `Variable`, `1-3`, `1-6`, `1-12`, `1-24` or `1-48` | DFHRTF text, DFHRTF graphs, per-SOFA average, global average |
+| `{smoothing}` | Smoothing setting with `/` replaced by `-`: `Variable`, `Hybrid`, `1-3`, `1-6`, `1-12`, `1-24` or `1-48` | DFHRTF text, DFHRTF graphs, per-SOFA average, global average |
 | `{LR}` | Channel: `L` or `R`; `Avg` for the per-SOFA average | DFHRTF text, per-SOFA average, global-average text |
 | `{graphtype}` | Plot type: `df`, `stereo`, or `weighted` | DFHRTF graphs, global-average graph |
 | `{algo}` | Short algorithm name: `arithmean`, `geoarc`, `softdtw` | Global-average text files only |

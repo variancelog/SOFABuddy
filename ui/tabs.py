@@ -627,7 +627,7 @@ class DfhrtfTab(QWidget):
             "&bull; {folder} source file's parent folder name;<br>"
             "&bull; {samplerate} source SOFA samplerate;<br>"
             "&bull; {tilt} spectral tilt in dB/oct;<br>"
-            "&bull; {smoothing} smoothing setting (e.g. Variable, 1-12);<br>"
+            "&bull; {smoothing} smoothing setting (e.g. Variable, Hybrid, 1-12);<br>"
             "&bull; {LR} L/R/Avg.;<br>"
             "&bull; {algo} averaging algorithm (global average only).</p>"
         )
@@ -675,7 +675,7 @@ class DfhrtfTab(QWidget):
             "&bull; {filename} source SOFA filename;<br>"
             "&bull; {folder} source file's parent folder name;<br>"
             "&bull; {tilt} spectral tilt in dB/oct;<br>"
-            "&bull; {smoothing} smoothing setting (e.g. Variable, 1-12);<br>"
+            "&bull; {smoothing} smoothing setting (e.g. Variable, Hybrid, 1-12);<br>"
             "&bull; {graphtype} df / stereo / weighted.</p>"
         )
         self.dd_graph_ext = FlameDropdown("Extension")
@@ -685,7 +685,7 @@ class DfhrtfTab(QWidget):
 
         # --- Refinement Section ---
         self.dd_smoothing = FlameDropdown("Smoothing")
-        self.dd_smoothing.addItems(["Variable", "1/3", "1/6", "1/12", "1/24", "1/48"])
+        self.dd_smoothing.addItems(["Variable", "Hybrid", "1/3", "1/6", "1/12", "1/24", "1/48"])
         self.dd_smoothing.set_value(schema_default("dfhrtf", "smoothing"))
         self.dd_smoothing.setToolTip(
             "<p>Smoothing applied to both text and graph outputs, using a Gaussian "
@@ -693,9 +693,12 @@ class DfhrtfTab(QWidget):
             "can switch it to a flat window). 'Variable' uses a window width "
             "that changes with frequency (a list of points, tunable via "
             "dfhrtf.advanced.variable_smoothing_profile in the settings JSON); "
+            "'Hybrid' bridges narrow measurement ripple below about 7 kHz and "
+            "keeps real narrow pinna peaks and notches above it (tunable via "
+            "dfhrtf.advanced.hybrid_* in the settings JSON); "
             "'1/n' uses a fixed 1/n octave window. Averaging is in power "
             "(dfhrtf.advanced.smoothing_mean_mode) and data above 20 kHz is "
-            "left out.</p>"
+            "left out. Tilt and LF extension are applied after smoothing.</p>"
         )
         _tmin, _tmax = schema_bounds("dfhrtf.tilt", (-2.0, 1.0))
         self.slider_tilt = FlameNumericSlider(

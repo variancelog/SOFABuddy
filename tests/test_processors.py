@@ -380,7 +380,7 @@ class TestDfhrtfInputResolution:
 
 
     @pytest.mark.parametrize("dropdown,expected", [
-        ("Variable", "Variable"), ("1/3", "1-3"), ("1/6", "1-6"),
+        ("Variable", "Variable"), ("Hybrid", "Hybrid"), ("1/3", "1-3"), ("1/6", "1-6"),
         ("1/12", "1-12"), ("1/24", "1-24"), ("1/48", "1-48"),
     ])
     def test_smoothing_token_in_dfhrtf_output_names(self, spies, tmp_path,
@@ -481,6 +481,45 @@ class TestSmoothingProfileHandoff:
         assert common["var_smooth_profile"] == "500:3,5000:12:0.7,12000:12"
         assert common["smoothing_window"] == "flat"
 
+    @pytest.mark.parametrize("dropdown, arg", [
+        ("Variable", "variable"), ("Hybrid", "hybrid"), ("1/24", "24"), ("24", "24")])
+    def test_smoothing_dropdown_maps_to_the_backend_value(self, spies, tmp_path, monkeypatch,
+                                                          dropdown, arg):
+        seen = {}
+        real = dfhrtf_processor.write_manifest
+
+        def spy(tmp_dir, common, jobs):
+            seen.update(common)
+            return real(tmp_dir, common, jobs)
+
+        monkeypatch.setattr(dfhrtf_processor, "write_manifest", spy)
+        files = touch_inputs(tmp_path, ["a.sofa"])
+        cfg = make_config(files, sofa_enabled=False)
+        cfg["dfhrtf"]["smoothing"] = dropdown
+        assert dfhrtf_processor.process_dfhrtf_exports(cfg, **Recorder().kwargs) is True
+        assert seen["smoothing"] == arg
+
+    def test_hybrid_settings_reach_the_backend(self, spies, tmp_path, monkeypatch):
+        common = self._common(spies, tmp_path, monkeypatch, {
+            "hybrid_xover_hz": 6000.0, "hybrid_xover_width_oct": 0.2, "hybrid_tv_weight": 1.0,
+            "hybrid_s_factor": 2.0, "hybrid_s_min": 3.0, "hybrid_s_max": 9.0,
+            "hybrid_huber_window": 11,
+            "hybrid_huber_delta": 0.2, "hybrid_huber_iter": 3,
+        })
+        assert (common["hybrid_xover_hz"], common["hybrid_xover_width_oct"],
+                common["hybrid_tv_weight"], common["hybrid_s_factor"],
+                common["hybrid_s_min"], common["hybrid_s_max"],
+                common["hybrid_huber_window"], common["hybrid_huber_delta"],
+                common["hybrid_huber_iter"]) == (6000.0, 0.2, 1.0, 2.0, 3.0, 9.0, 11, 0.2, 3)
+
+    def test_missing_hybrid_settings_fall_back_to_the_factory_values(self, spies, tmp_path, monkeypatch):
+        from core.hybrid_smoothing import HybridParams
+        common = self._common(spies, tmp_path, monkeypatch, {})
+        p = HybridParams()
+        assert common["hybrid_huber_window"] == p.huber_window
+        assert common["hybrid_xover_hz"] == p.xover_hz
+        assert common["hybrid_huber_iter"] == p.huber_iter
+
     def test_missing_settings_fall_back_to_the_factory_values(self, spies, tmp_path, monkeypatch):
         from core.smoothing import SmoothingParams, format_profile
         common = self._common(spies, tmp_path, monkeypatch, {})
@@ -493,6 +532,8 @@ class TestSmoothingProfileHandoff:
     ("variable", "Variable"),   # backend CLI value
     ("1/24", "1/24"),           # GUI dropdown value
     ("24", "1/24"),             # backend CLI value
+    ("Hybrid", "Hybrid"),       # GUI dropdown value
+    ("hybrid", "Hybrid"),       # backend CLI value
 ])
 def test_graph_subtitle_names_smoothing_like_the_dropdown(value, shown):
     from core.plotting import graph_subtitle
@@ -511,8 +552,32 @@ def test_graph_subtitle_without_smoothing_is_tilt_only():
     ("variable", "flat", "Variable (Flat)"),
     ("1/24", "gaussian", "1/24 (Gaussian)"),
     ("24", "flat", "1/24 (Flat)"),
+    ("Hybrid", "gaussian", "Hybrid"),   # the window only shapes Hybrid's first stage
+    ("hybrid", "flat", "Hybrid"),
 ])
 def test_graph_subtitle_names_the_window_when_given(value, window, shown):
     from core.plotting import graph_subtitle
 
     assert graph_subtitle(0.0, value, window) == f"Spectral Tilt: 0.0 dB/oct; Smoothing: {shown}"
+
+
+def test_graph_subtitle_shows_hybrid_s_per_ear_to_one_decimal():
+    from core.plotting import graph_subtitle
+
+    assert (graph_subtitle(0.0, "hybrid", "gaussian", (9.43, 8.96))
+            == "Spectral Tilt: 0.0 dB/oct; Smoothing: Hybrid (s L 9.4, R 9.0)")
+    assert graph_subtitle(0.0, "Hybrid", None, (4.0, 12.0)).endswith("Hybrid (s L 4.0, R 12.0)")
+
+
+def test_graph_subtitle_hybrid_without_s_stays_plain():
+    """Averaged graphs (no single s) and filenames/{smoothing} keep plain 'Hybrid'."""
+    from core.plotting import graph_subtitle, smoothing_display_name
+
+    assert graph_subtitle(0.0, "Hybrid", "gaussian") == "Spectral Tilt: 0.0 dB/oct; Smoothing: Hybrid"
+    assert smoothing_display_name("Hybrid") == "Hybrid"
+
+
+def test_hybrid_s_is_ignored_for_non_hybrid_smoothing():
+    from core.plotting import smoothing_display_name
+
+    assert smoothing_display_name("Variable", "gaussian", (9.0, 9.0)) == "Variable (Gaussian)"

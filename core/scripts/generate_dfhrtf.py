@@ -22,9 +22,11 @@ from core.sofa_io import read_sofa_robust  # noqa: E402
 from core.grid_info import grid_coverage  # noqa: E402
 from core.grid_plot import FIGSIZE, plot_weighted_grid  # noqa: E402
 from core.smoothing import (  # noqa: E402
-    BAND_LIMIT_HZ, SmoothingParams, fixed_smooth, parse_profile, variable_smooth,
+    BAND_LIMIT_HZ, SmoothingParams, fixed_smooth, generate_fractional_octave_frequencies,
+    parse_profile, variable_smooth,
 )
-from core.plotting import graph_subtitle  # noqa: E402
+from core.hybrid_smoothing import HybridParams, hybrid_smooth  # noqa: E402
+from core.plotting import format_hybrid_s, graph_subtitle  # noqa: E402
 
 
 # ================= HELPER FUNCTIONS =================
@@ -151,15 +153,6 @@ def find_closest_grid_point(source_pos, target_az, target_el):
     distances = np.linalg.norm(source_cart - target_cart, axis=1)
     return np.argmin(distances)
 
-def generate_fractional_octave_frequencies(start_freq, end_freq, fraction=6):
-    """Generates log-spaced frequencies."""
-    freqs = []
-    f = start_freq
-    while f <= end_freq:
-        freqs.append(f)
-        f *= 2**(1/fraction)
-    return np.array(freqs)
-
 def apply_spectral_tilt(freqs, magnitude_db, slope_per_octave, ref_freq=1000.0):
     """Applies a dB/octave tilt pivoting at ref_freq."""
     if slope_per_octave == 0:
@@ -168,17 +161,45 @@ def apply_spectral_tilt(freqs, magnitude_db, slope_per_octave, ref_freq=1000.0):
     tilt_curve = num_octaves * slope_per_octave
     return magnitude_db + tilt_curve
 
+def hybrid_params_from_args(args):
+    """HybridParams from the --hybrid-* args (raises ValueError if out of range)."""
+    return HybridParams(
+        xover_hz=args.hybrid_xover_hz,
+        xover_width_oct=args.hybrid_xover_width_oct,
+        tv_weight=args.hybrid_tv_weight,
+        s_factor=args.hybrid_s_factor,
+        s_min=args.hybrid_s_min,
+        s_max=args.hybrid_s_max,
+        huber_window=args.hybrid_huber_window,
+        huber_delta=args.hybrid_huber_delta,
+        huber_iter=args.hybrid_huber_iter,
+    )
+
 def make_smoother(args):
     """Return (smooth_fn(freqs, mags_db, out_freqs), label) for --smoothing.
 
     Both modes go through core.smoothing.smooth_spectrum (--smoothing-window
     shaped log-frequency window, band-limited to the output grid, averaged in
     --smoothing-mean-mode): 'variable' uses the frequency-dependent width from
-    --var-smooth-profile; an integer string N uses a fixed 1/N-octave width.
-    smooth_fn evaluates the smoothed spectrum directly at out_freqs.
+    --var-smooth-profile; an integer string N uses a fixed 1/N-octave width;
+    'hybrid' is core.hybrid_smoothing (--hybrid-* parameters; --smoothing-window
+    and --smoothing-mean-mode shape its first, 1/48-octave stage).
+    smooth_fn evaluates the smoothed spectrum directly at out_freqs. The Hybrid
+    smoother picks its spline smoothness s per curve; smooth_fn.last_s holds the
+    s of its most recent call (absent on the other modes).
     """
     mean_mode = args.smoothing_mean_mode
     window = args.smoothing_window
+    if str(args.smoothing).lower() == "hybrid":
+        # Built here (not only in main()) so a bad value in manifest mode, which
+        # bypasses argparse, fails that job with a [JOB FAIL] line.
+        hparams = hybrid_params_from_args(args)
+        def smooth_hybrid(freqs, mags, out_freqs):
+            out, smooth_hybrid.last_s = hybrid_smooth(
+                freqs, mags, hparams, out_freqs, mean_mode=mean_mode, window=window, return_s=True)
+            return out
+        smooth_hybrid.last_s = None
+        return smooth_hybrid, "Hybrid Smoothing"
     if str(args.smoothing).lower() == "variable":
         params = SmoothingParams(
             points=parse_profile(args.var_smooth_profile),
@@ -340,7 +361,8 @@ def build_parser():
     
     # Refinement Parameters
     parser.add_argument("--smoothing", type=str, default="variable",
-                        help="'variable' for frequency-dependent smoothing, or an integer N for fixed 1/N-octave smoothing")
+                        help="'variable' for frequency-dependent smoothing, 'hybrid' for the adaptive Hybrid "
+                             "smoother, or an integer N for fixed 1/N-octave smoothing")
     parser.add_argument("--tilt", type=float, default=0.0, help="Spectral Tilt (dB/oct)")
     parser.add_argument("--lr-avg-gamma", type=float, default=0.01, help="Soft-DTW gamma for per-SOFA L/R average")
     parser.add_argument("--lf_ext_dfhrtf", action="store_true", help="Enable Low Frequency extension using reference file")
@@ -374,6 +396,27 @@ def build_parser():
                              "points (freq Hz strictly increasing; window is 1/n octave; gamma warps "
                              "the ramp arriving at that point, 1.0 = linear in log-frequency)")
 
+    # Hybrid smoothing (used when --smoothing hybrid); see core/hybrid_smoothing.py
+    parser.add_argument("--hybrid-xover-hz", type=float, default=7350.0,
+                        help="Hybrid: crossover between the low/mid spline and the HF robust fit (Hz)")
+    parser.add_argument("--hybrid-xover-width-oct", type=float, default=0.08,
+                        help="Hybrid: logistic crossfade width (octaves)")
+    parser.add_argument("--hybrid-tv-weight", type=float, default=0.65,
+                        help="Hybrid: total-variation denoising weight for the low/mid ripple detector")
+    parser.add_argument("--hybrid-s-factor", type=float, default=3.0,
+                        help="Hybrid: spline smoothness s = factor * N * sigma^2, from each curve's own "
+                             "noise sigma below the crossover (N = 479 grid points)")
+    parser.add_argument("--hybrid-s-min", type=float, default=4.0,
+                        help="Hybrid: lower bound of the per-curve spline smoothness s")
+    parser.add_argument("--hybrid-s-max", type=float, default=12.0,
+                        help="Hybrid: upper bound of the per-curve spline smoothness s")
+    parser.add_argument("--hybrid-huber-window", type=int, default=9,
+                        help="Hybrid: odd window (1/48-octave bins) of the HF local cubic fit")
+    parser.add_argument("--hybrid-huber-delta", type=float, default=0.12,
+                        help="Hybrid: minimum Huber outlier threshold (dB)")
+    parser.add_argument("--hybrid-huber-iter", type=int, default=6,
+                        help="Hybrid: IRLS iterations of the HF fit")
+
     parser.add_argument("--weighting-mode", default="auto", choices=["auto", "geometric", "uniform"],
                         help="Grid weighting mode: auto (detect balanced grids), geometric, or uniform 1/N")
 
@@ -401,6 +444,12 @@ def main():
         parse_profile(args.var_smooth_profile)
     except ValueError as exc:
         parser.error(f"--var-smooth-profile: {exc}")
+
+    if str(args.smoothing).lower() == "hybrid":
+        try:
+            hybrid_params_from_args(args)
+        except ValueError as exc:
+            parser.error(f"--hybrid-*: {exc}")
 
     if not args.input:
         parser.error("--input is required unless --manifest is given")
@@ -463,7 +512,11 @@ def run_dfhrtf(args):
         avg_db = diffuse_field_db(hrirs, weights, n_fft)
 
         val_l = smooth_fn(fft_freqs, avg_db[0], target_freqs)
+        s_l = getattr(smooth_fn, "last_s", None)
         val_r = smooth_fn(fft_freqs, avg_db[1], target_freqs)
+        df_hybrid_s = (s_l, smooth_fn.last_s) if s_l is not None else None
+        if df_hybrid_s:
+            print(f"   -> Hybrid s: {format_hybrid_s(df_hybrid_s)}")
 
         # 4. Normalize (0 dB at norm_freq_hz)
         # preserve_lr_balance: use a single shared mean reference so the real
@@ -530,7 +583,7 @@ def run_dfhrtf(args):
         plt.semilogx(target_freqs, val_l, label='Left Ear', linewidth=2, alpha=0.8)
         plt.semilogx(target_freqs, val_r, label='Right Ear', linewidth=2, alpha=0.8, linestyle='--')
 
-        title_str = f"Diffuse Field HRTF (Normalized)\n{graph_subtitle(args.tilt, args.smoothing, args.smoothing_window)}"
+        title_str = f"Diffuse Field HRTF (Normalized)\n{graph_subtitle(args.tilt, args.smoothing, args.smoothing_window, df_hybrid_s)}"
         plt.title(title_str)
         plt.xlabel("Frequency (Hz)")
         plt.ylabel("Magnitude (dB)")
@@ -562,10 +615,14 @@ def run_dfhrtf(args):
         # Process L Ear
         mag_30L = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30L, 0, :], n=n_fft)) + 1e-12)
         val_30L = smooth_fn(fft_freqs, mag_30L, target_freqs)
+        s_30l = getattr(smooth_fn, "last_s", None)
 
         # Process R Ear
         mag_30R = 20 * np.log10(np.abs(np.fft.rfft(hrirs[idx_30R, 1, :], n=n_fft)) + 1e-12)
         val_30R = smooth_fn(fft_freqs, mag_30R, target_freqs)
+        stereo_hybrid_s = (s_30l, smooth_fn.last_s) if s_30l is not None else None
+        if stereo_hybrid_s:
+            print(f"   -> Hybrid s (stereo): {format_hybrid_s(stereo_hybrid_s)}")
 
         # Normalize — shared reference preserves the stereo pair's ILD
         if args.preserve_lr_balance:
@@ -600,7 +657,7 @@ def run_dfhrtf(args):
         plt.semilogx(target_freqs, val_30L, label='Left Ear (+30°)', linewidth=2, alpha=0.8)
         plt.semilogx(target_freqs, val_30R, label='Right Ear (-30°)', linewidth=2, alpha=0.8, linestyle='--')
         
-        title_str = f"Stereo Response (+/-30°)\n{graph_subtitle(args.tilt, args.smoothing, args.smoothing_window)}"
+        title_str = f"Stereo Response (+/-30°)\n{graph_subtitle(args.tilt, args.smoothing, args.smoothing_window, stereo_hybrid_s)}"
         plt.title(title_str)
         plt.xlabel("Frequency (Hz)")
         plt.ylabel("Magnitude (dB)")

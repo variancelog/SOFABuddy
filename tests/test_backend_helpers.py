@@ -189,6 +189,96 @@ class TestMakeSmoother:
             fixed_smooth(freqs, mags, 3, self.OUT, mean_mode=mode), atol=1e-12,
         )
 
+    def test_hybrid_mode_dispatch(self, dfhrtf_args):
+        from core.hybrid_smoothing import HybridParams, hybrid_smooth
+
+        args = dfhrtf_args(smoothing="hybrid", hybrid_huber_window=11)
+        smooth_fn, label = make_smoother(args)
+        assert label == "Hybrid Smoothing"
+        freqs, mags = self._data(8)
+        out = np.array([100.0, 1000.0, 5000.0, 12000.0, 19000.0])
+        expected = hybrid_smooth(freqs, mags, HybridParams(huber_window=11), out,
+                                 mean_mode=args.smoothing_mean_mode, window=args.smoothing_window)
+        np.testing.assert_allclose(smooth_fn(freqs, mags, out), expected, atol=1e-12)
+
+    def test_hybrid_smoother_reports_the_s_of_its_last_call(self, dfhrtf_args):
+        smooth_fn, _ = make_smoother(dfhrtf_args(smoothing="hybrid"))
+        freqs, mags = self._data(8)
+        out = np.array([100.0, 1000.0, 5000.0, 12000.0, 19000.0])
+        smooth_fn(freqs, mags, out)
+        s_first = smooth_fn.last_s
+        smooth_fn(freqs, mags + np.random.default_rng(1).normal(0, 4.0, mags.size), out)
+        assert 4.0 <= s_first <= 12.0 and smooth_fn.last_s == 12.0
+
+    def test_non_hybrid_smoothers_report_no_s(self, dfhrtf_args):
+        smooth_fn, _ = make_smoother(dfhrtf_args(smoothing="variable"))
+        assert getattr(smooth_fn, "last_s", None) is None
+
+    def test_swapped_hybrid_s_bounds_fail_cleanly(self, dfhrtf_args):
+        with pytest.raises(ValueError, match="s_min"):
+            make_smoother(dfhrtf_args(smoothing="hybrid", hybrid_s_min=20.0, hybrid_s_max=6.0))
+
+    def test_cli_rejects_swapped_hybrid_s_bounds(self):
+        import subprocess, sys
+        from pathlib import Path
+        script = Path(__file__).parent.parent / "core" / "scripts" / "generate_dfhrtf.py"
+        r = subprocess.run([sys.executable, str(script), "--smoothing", "hybrid",
+                            "--hybrid-s-min", "20", "--hybrid-s-max", "6", "--input", "x.sofa"],
+                           capture_output=True, text=True)
+        assert r.returncode == 2 and "s_min" in r.stderr
+
+    def test_run_dfhrtf_logs_hybrid_s_and_titles_the_graphs(self, dfhrtf_args, tmp_path,
+                                                            monkeypatch, capsys):
+        from types import SimpleNamespace
+        from core.scripts import generate_dfhrtf as gd
+        rng = np.random.default_rng(0)
+        az = np.concatenate([np.arange(0, 360, 30.0)] * 3)
+        el = np.repeat([-30.0, 0.0, 30.0], 12)
+        fake = SimpleNamespace(
+            Data_IR=rng.normal(0, 1, (36, 2, 256)) * np.exp(-np.arange(256) / 40.0),
+            Data_SamplingRate=48000.0,
+            SourcePosition=np.column_stack([az, el, np.ones(36)]))
+        monkeypatch.setattr(gd, "read_sofa_robust", lambda path: fake)
+        titles = []
+        plt = gd._get_pyplot()
+        real_title = plt.title
+        monkeypatch.setattr(plt, "title", lambda t, *a, **k: (titles.append(t), real_title(t, *a, **k))[1])
+        (tmp_path / "x.sofa").write_bytes(b"")
+        args = dfhrtf_args(smoothing="hybrid", input=str(tmp_path / "x.sofa"),
+                           graph_out=str(tmp_path / "df.png"),
+                           graph_stereo_out=str(tmp_path / "st.png"))
+        gd.run_dfhrtf(args)
+        out = capsys.readouterr().out
+        import re
+        m_df = re.search(r"-> Hybrid s: L (\d+\.\d), R (\d+\.\d)\n", out)
+        m_st = re.search(r"-> Hybrid s \(stereo\): L (\d+\.\d), R (\d+\.\d)\n", out)
+        assert m_df and m_st
+        assert f"Smoothing: Hybrid (s L {m_df[1]}, R {m_df[2]})" in titles[0]
+        assert f"Smoothing: Hybrid (s L {m_st[1]}, R {m_st[2]})" in titles[1]
+
+    def test_hybrid_mode_is_case_insensitive(self, dfhrtf_args):
+        _, label = make_smoother(dfhrtf_args(smoothing="Hybrid"))
+        assert label == "Hybrid Smoothing"
+
+    def test_bad_hybrid_value_raises_at_make_smoother(self, dfhrtf_args):
+        # manifest mode bypasses argparse, so this is what turns into [JOB FAIL]
+        with pytest.raises(ValueError):
+            make_smoother(dfhrtf_args(smoothing="hybrid", hybrid_huber_window=8))
+
+    def test_bad_hybrid_value_is_ignored_unless_hybrid_is_selected(self, dfhrtf_args):
+        make_smoother(dfhrtf_args(smoothing="12", hybrid_huber_window=8))
+
+    def test_cli_rejects_bad_hybrid_value(self):
+        from core.scripts.generate_dfhrtf import build_parser
+        import subprocess, sys
+        from pathlib import Path
+        script = Path(__file__).parent.parent / "core" / "scripts" / "generate_dfhrtf.py"
+        r = subprocess.run([sys.executable, str(script), "--smoothing", "hybrid",
+                            "--hybrid-huber-window", "8", "--input", "x.sofa"],
+                           capture_output=True, text=True)
+        assert r.returncode == 2
+        assert "hybrid" in r.stderr.lower()
+
     def test_variable_and_fixed_produce_different_curves(self, dfhrtf_args):
         freqs, mags = self._data(2)
         var_fn, _ = make_smoother(dfhrtf_args(smoothing="variable"))

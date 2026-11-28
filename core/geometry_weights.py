@@ -77,6 +77,31 @@ def get_dominant_radius(source_pos):
     return values[np.argmax(counts)]
 
 
+def clean_source_indices(source_pos):
+    """Return indices (into the original rows) of the sanitised source points.
+
+    Filters to the dominant measurement radius (+/-0.05 m) and removes duplicate
+    angular positions (az/el rounded to 3 decimals; first occurrence kept, in
+    np.unique's sorted order).  Shared by calculate_geometric_weights and
+    hrtf_explorer.py so both see the same point set.
+
+    Parameters
+    ----------
+    source_pos : ndarray, shape (M, 3)
+        SOFA SourcePosition array (azimuth deg, elevation deg, radius m).
+    """
+    dominant_r = get_dominant_radius(source_pos)
+
+    # Filter out points that deviate significantly from the dominant radius
+    valid_idx = np.abs(source_pos[:, 2] - dominant_r) < 0.05
+
+    # Remove duplicate angular positions
+    az_el_rounded = np.round(source_pos[valid_idx][:, 0:2], decimals=3)
+    _, unique_idx = np.unique(az_el_rounded, axis=0, return_index=True)
+
+    return np.where(valid_idx)[0][unique_idx]
+
+
 def _is_equal_weight_design(cart_coords, tol=1e-6):
     """Return True iff the points form a genuine spherical t/n-design.
 
@@ -196,16 +221,7 @@ def calculate_geometric_weights(source_pos, advanced_dfeq=True,
 
     # ── Cleaning prologue ────────────────────────────────────────────────────
     if advanced_dfeq:
-        dominant_r = get_dominant_radius(source_pos)
-
-        # Filter out points that deviate significantly from the dominant radius
-        valid_idx = np.abs(source_pos[:, 2] - dominant_r) < 0.05
-
-        # Remove duplicate angular positions
-        az_el_rounded = np.round(source_pos[valid_idx][:, 0:2], decimals=3)
-        _, unique_idx = np.unique(az_el_rounded, axis=0, return_index=True)
-
-        final_idx = np.where(valid_idx)[0][unique_idx]
+        final_idx = clean_source_indices(source_pos)
         az_clean = az[final_idx]
         el_clean = el[final_idx]
         cart_coords = spherical_to_cartesian(1.0, az_clean, el_clean)

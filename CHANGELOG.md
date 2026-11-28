@@ -1,6 +1,15 @@
-## Unreleased
+## v0.8.0 (2026-11-27)
 
 ### Added
+- **Hybrid smoothing**, a new choice in the DFHRTF Smoothing dropdown (CLI `--smoothing hybrid`; the `{smoothing}` filename variable and graph subtitles read `Hybrid`). It removes measurement artefacts while keeping real pinna features, using two regimes joined by a smooth crossover:
+  - Below the crossover (7.35 kHz) narrow dips, such as rig reflections and concha jitter, are bridged by a smoothing spline whose weights are reduced where a total-variation denoiser says the curve is rippling.
+  - Above it, a robust (Huber-reweighted) local cubic fit rejects 1-2 bin glitches, such as the 14.69 kHz HUTUBS spike, but keeps multi-bin peaks and deep notches.
+  - It runs on the 1/48-octave DFHRTF curve: the raw spectrum is first smoothed to the 1/48-octave grid with the usual window and averaging settings, then Hybrid is applied, then the result is interpolated to the output grid.
+  - Nine JSON-only tunables, `dfhrtf.advanced.hybrid_xover_hz`, `hybrid_xover_width_oct`, `hybrid_tv_weight`, `hybrid_s_factor`, `hybrid_s_min`, `hybrid_s_max`, `hybrid_huber_window`, `hybrid_huber_delta` and `hybrid_huber_iter` (CLI `--hybrid-*`). Unrelated to `dfhrtf.xover`, the LF-extension crossover.
+  - The spline's smoothness `s` is chosen per curve from its own noise level, so each ear (and each ±30° stereo curve) gets its own value: `s = s_factor x 479 x sigma^2` (sigma is the ripple the denoiser removes below the crossover), limited to `s_min`-`s_max` (defaults 3.0, 4.0, 12.0). A fixed `s` cannot suit every dataset: noisy ones (e.g. ARI) use it up on broad noise and keep their 3.5 kHz ripple, while a value big enough for them over-smooths clean HUTUBS and COAT curves.
+  - The chosen `s` is printed in the job log (`-> Hybrid s: L 9.4, R 9.0`, and a `(stereo)` line for the ±30° curves) and shown on those graphs' subtitles (`Smoothing: Hybrid (s L 9.4, R 9.0)`). Averaged graphs, filenames and `{smoothing}` stay plain `Hybrid`.
+  - Spectral tilt and LF extension are applied after smoothing, as in every mode.
+  - The total-variation denoiser is a numpy port of scikit-image's, so no new dependency; `tools/build_hybrid_reference.py` regenerates the reference fixture the tests compare against.
 - **Gaussian smoothing window**, the new default for every smoothing path (fixed 1/N, Variable, DFHRTF curves, the ±30° stereo curves). New setting `dfhrtf.advanced.smoothing_window`: `"gaussian"` (default) or `"flat"`; CLI `--smoothing-window`.
   - Why: for ripple periods between w/2 and w, the flat window's gain goes negative, so those peaks and dips come out inverted. The Gaussian's gain is never negative.
   - Its sigma is w/√12, the same variance as the flat window, so "1/N" means the same amount of smoothing in either window.

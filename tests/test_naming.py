@@ -163,7 +163,7 @@ def test_path_traversal_in_tokens_is_sanitized():
     assert ".." not in out
 
 
-@pytest.mark.parametrize("dropdown", ["Variable", "1/3", "1/6", "1/12", "1/24", "1/48"])
+@pytest.mark.parametrize("dropdown", ["Variable", "Hybrid", "1/3", "1/6", "1/12", "1/24", "1/48"])
 def test_smoothing_token_replaces_slash(dropdown):
     # dfhrtf_processor builds the value as dropdown.replace("/", "-")
     out = render_filename("{filename} {smoothing}",

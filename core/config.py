@@ -40,6 +40,9 @@ _RETIRED_KEYS = (
     "dfhrtf.advanced.variable_smoothing_n_low",
     "dfhrtf.advanced.variable_smoothing_n_hi",
     "dfhrtf.advanced.variable_smoothing_gamma",
+    # Replaced by the adaptive hybrid_s_factor / hybrid_s_min / hybrid_s_max.
+    # Never shipped in a release, so no migration or schema bump.
+    "dfhrtf.advanced.hybrid_spline_smoothness",
 )
 
 SCHEMA_VERSION = 2
@@ -182,7 +185,7 @@ SCHEMA: dict[str, dict] = {
     "dfhrtf.graph_filename":      {"type": str},
     "dfhrtf.graph_extension":     {"type": str, "choices": ["png", "jpg"]},
     "dfhrtf.smoothing":           {"type": str,
-                                    "choices": ["Variable", "1/3", "1/6", "1/12", "1/24", "1/48"]},
+                                    "choices": ["Variable", "Hybrid", "1/3", "1/6", "1/12", "1/24", "1/48"]},
     "dfhrtf.tilt":                {"type": float, "min": -2.0, "max": 1.0},
     "dfhrtf.extend_lf":           {"type": bool},
     "dfhrtf.xover":               {"type": float, "min": _DFHRTF_XOVER[0], "max": _DFHRTF_XOVER[1]},
@@ -210,6 +213,17 @@ SCHEMA: dict[str, dict] = {
     "dfhrtf.advanced.variable_smoothing_profile":   {"type": list, "custom": "smoothing_profile"},
     "dfhrtf.advanced.smoothing_window":             {"type": str,   "choices": ["gaussian", "flat"]},
     "dfhrtf.advanced.smoothing_mean_mode":          {"type": str,   "choices": ["power", "db", "cubic"]},
+
+    # Hybrid smoothing (core/hybrid_smoothing.py); ranges mirror HybridParams.
+    "dfhrtf.advanced.hybrid_xover_hz":              {"type": float, "min": 5500.0, "max": 9000.0},
+    "dfhrtf.advanced.hybrid_xover_width_oct":       {"type": float, "min": 0.01, "max": 0.5},
+    "dfhrtf.advanced.hybrid_tv_weight":             {"type": float, "min": 0.05, "max": 5.0},
+    "dfhrtf.advanced.hybrid_s_factor":              {"type": float, "min": 0.5, "max": 10.0},
+    "dfhrtf.advanced.hybrid_s_min":                 {"type": float, "min": 0.5, "max": 30.0},
+    "dfhrtf.advanced.hybrid_s_max":                 {"type": float, "min": 0.5, "max": 30.0},
+    "dfhrtf.advanced.hybrid_huber_window":          {"type": int,   "choices": [5, 7, 9, 11, 13, 15]},
+    "dfhrtf.advanced.hybrid_huber_delta":           {"type": float, "min": 0.05, "max": 0.30},
+    "dfhrtf.advanced.hybrid_huber_iter":            {"type": int,   "min": 1, "max": 20},
 
     # -- averaging --
     "averaging.num_points":            {"type": int, "min": 64, "max": 4096},
@@ -396,6 +410,17 @@ def validate(cfg: dict, notices: list | None = None) -> tuple:
                 value = type(value)(max_val)
 
         _set_nested(cfg, path, value)
+
+    # hybrid_s_min must not exceed hybrid_s_max; clamping can't repair a swapped
+    # pair, so put both back to the defaults.
+    s_lo, lo_found = _get_nested(cfg, "dfhrtf.advanced.hybrid_s_min")
+    s_hi, hi_found = _get_nested(cfg, "dfhrtf.advanced.hybrid_s_max")
+    if lo_found and hi_found and s_lo > s_hi:
+        warnings.append(
+            f"Config: 'dfhrtf.advanced.hybrid_s_min' = {s_lo} exceeds "
+            f"'dfhrtf.advanced.hybrid_s_max' = {s_hi}, both reverted to defaults.")
+        for key in ("hybrid_s_min", "hybrid_s_max"):
+            _set_nested(cfg, f"dfhrtf.advanced.{key}", _get_nested(defaults, f"dfhrtf.advanced.{key}")[0])
 
     # Never persist the files list
     cfg.pop("files", None)

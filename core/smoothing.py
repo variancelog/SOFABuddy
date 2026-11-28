@@ -66,6 +66,22 @@ import numpy as np
 # smoothing window; generate_dfhrtf.py builds its output grid up to this value.
 BAND_LIMIT_HZ = 20000.0
 
+
+def generate_fractional_octave_frequencies(start_freq, end_freq, fraction=6):
+    """Log-spaced frequencies start, start*2^(1/fraction), ... up to end_freq.
+
+    The DFHRTF output grid (see generate_dfhrtf.py, which re-exports this) and
+    the Hybrid smoother's canonical grid. Built by repeated multiplication, so
+    it differs by one boundary point from core/averaging.py's generator.
+    """
+    freqs = []
+    f = start_freq
+    while f <= end_freq:
+        freqs.append(f)
+        f *= 2**(1/fraction)
+    return np.array(freqs)
+
+
 WINDOWS = ("gaussian", "flat")
 
 # mean_mode -> (dB -> averaging domain, averaging domain -> dB)

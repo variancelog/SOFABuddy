@@ -235,8 +235,9 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
         # the CLI path only ever got via argparse defaults.
         dfhrtf_adv = df_cfg.get('advanced', {})
         smoothing_cfg = str(df_cfg.get('smoothing', 'Variable'))
-        # 'Variable' -> 'variable'; '1/24' (or legacy 24) -> '24'
-        smoothing_arg = 'variable' if smoothing_cfg.lower() == 'variable' else smoothing_cfg.split('/')[-1]
+        # 'Variable' -> 'variable'; 'Hybrid' -> 'hybrid'; '1/24' (or legacy 24) -> '24'
+        smoothing_arg = (smoothing_cfg.lower() if smoothing_cfg.lower() in ('variable', 'hybrid')
+                         else smoothing_cfg.split('/')[-1])
 
         # Compact --var-smooth-profile string; the literal is the fallback when the
         # settings carry no profile (keep in sync: test_variable_smoothing_four_way_sync).
@@ -269,6 +270,16 @@ def process_dfhrtf_exports(config, progress_callback, log_callback, error_callba
             "var_smooth_profile": smoothing_profile_arg,
             "smoothing_window": str(dfhrtf_adv.get('smoothing_window', 'gaussian')).lower(),
             "smoothing_mean_mode": str(dfhrtf_adv.get('smoothing_mean_mode', 'power')).lower(),
+            # Hybrid smoothing (keep in sync: test_hybrid_four_way_sync)
+            "hybrid_xover_hz": float(dfhrtf_adv.get('hybrid_xover_hz', 7350.0)),
+            "hybrid_xover_width_oct": float(dfhrtf_adv.get('hybrid_xover_width_oct', 0.08)),
+            "hybrid_tv_weight": float(dfhrtf_adv.get('hybrid_tv_weight', 0.65)),
+            "hybrid_s_factor": float(dfhrtf_adv.get('hybrid_s_factor', 3.0)),
+            "hybrid_s_min": float(dfhrtf_adv.get('hybrid_s_min', 4.0)),
+            "hybrid_s_max": float(dfhrtf_adv.get('hybrid_s_max', 12.0)),
+            "hybrid_huber_window": int(dfhrtf_adv.get('hybrid_huber_window', 9)),
+            "hybrid_huber_delta": float(dfhrtf_adv.get('hybrid_huber_delta', 0.12)),
+            "hybrid_huber_iter": int(dfhrtf_adv.get('hybrid_huber_iter', 6)),
         }
 
         # 3. Build Job List (sequential — no subprocesses, so groups/

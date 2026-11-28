@@ -138,7 +138,7 @@ class TestSmoothingEvaluatedOnOutputGrid:
         return np.random.default_rng(2).standard_normal(self.FREQS.size) * 3
 
     @pytest.mark.parametrize("window", ["flat", "gaussian"])
-    @pytest.mark.parametrize("smoothing", ["variable", "24", "3"])
+    @pytest.mark.parametrize("smoothing", ["variable", "hybrid", "24", "3"])
     def test_subset_evaluation_equals_full(self, smoothing, window):
         args = argparse_ns()
         args.smoothing = smoothing
